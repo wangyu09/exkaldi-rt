@@ -25,7 +25,7 @@ jobs:
        sudo apt-get update 
        sudo apt-get install sox
     - name: Install MKL
-      run: ./kaldi-master/tools/extras/install_mkl.sh
+      run: sudo ./kaldi-master/tools/extras/install_mkl.sh -sp debian intel-mkl-64bit-2019.2-057
     - name: Build project
       run: ./kaldi-master/tools/extras/check_dependencies.sh
       #    - name: configure
