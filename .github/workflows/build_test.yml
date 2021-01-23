@@ -23,7 +23,7 @@ jobs:
     - name: Install Dependencies
       run: |
        sudo apt-get update 
-       sudo apt-get install sox gdb g++-4.9 gfortran-4.9 liblapack-dev clang-3.8
+       sudo apt-get install sox
     - name: Install MKL
       run: sudo ./kaldi-master/tools/extras/install_mkl.sh -sp debian intel-mkl-64bit-2019.2-057
     - name: Check Kaldi Dependencies
