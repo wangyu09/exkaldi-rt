@@ -7,7 +7,7 @@ TESTFILES =
 
 OBJFILES = exkaldi-online-decoding.o online-endpoint.o
 
-LIBNAME = kaldi-online2
+LIBNAME = exkaldi-online
 
 ADDLIBS = ../ivector/kaldi-ivector.a ../nnet3/kaldi-nnet3.a \
           ../chain/kaldi-chain.a ../nnet2/kaldi-nnet2.a \
