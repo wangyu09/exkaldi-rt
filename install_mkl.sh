@@ -5,5 +5,5 @@ sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
 
 wget https://apt.repos.intel.com/setup/intelproducts.list -O /etc/apt/sources.list.d/intelproducts.list
 
-sudo apt update
-sudo apt install intel-mkl-2019.0-045
+sudo apt-get update
+sudo apt-get install intel-mkl-2019.0-045
