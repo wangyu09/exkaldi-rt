@@ -32,6 +32,12 @@ jobs:
       run: |
        cd kaldi-master/tools
        make -j 4
+    - name: Build Kaldi's src
+      run: |
+       cd kaldi-master/src
+       ./configure --shared --use-cuda=no
+       make depend -j 4
+       make -j 4
       #    - name: configure
       #      run: ./configure
       #    - name: make
