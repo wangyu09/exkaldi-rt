@@ -2,7 +2,7 @@ name: C/C++ CI
 
 on:
   push:
-    branches: [ main, add_ci_build_test ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -50,12 +50,3 @@ jobs:
        cd kaldi-master/src/exkaldionlinebin
        make depend
        make
-      #    - name: configure
-      #      run: ./configure
-      #    - name: make
-      #      run: make
-      #    - name: make check
-      #      run: make check
-      #    - name: make distcheck
-      #      run: make distcheck
-      #
