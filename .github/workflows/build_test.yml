@@ -21,7 +21,7 @@ jobs:
         git submodule sync
         git submodule update --init --recursive
     - name: Build project
-      run: echo "test"
+      run: ./kaldi-master/tools/extras/check_dependencies.sh
       #    - name: configure
       #      run: ./configure
       #    - name: make
