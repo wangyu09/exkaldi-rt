@@ -21,10 +21,9 @@ jobs:
         git submodule sync
         git submodule update --init --recursive
     - name: Install Dependencies
-        run: |
-         sudo apt-get install sox
+      run: sudo apt-get install sox
     - name: Install MKL
-        run: ./install_mkl.sh
+      run: ./install_mkl.sh
     - name: Build project
       run: ./kaldi-master/tools/extras/check_dependencies.sh
       #    - name: configure
