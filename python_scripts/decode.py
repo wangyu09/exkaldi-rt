@@ -100,6 +100,7 @@ class AcousticEstimator(StateFlag):
     self.__dim = None
 
     self.__reset_position_flag()
+    self.__estimateThread = None
   
   def __reset_position_flag(self):
     self.__terminationStep = False
@@ -227,6 +228,10 @@ class AcousticEstimator(StateFlag):
   def __set_termination(self):
     self.shift_state_to_termination()
     self.__probabilityPIPE.set_termination()
+
+  def wait(self):
+    if self.__estimateThread:
+      self.__estimateThread.join()
 
 class WfstDecoder(StateFlag):
 
@@ -460,3 +465,7 @@ class WfstDecoder(StateFlag):
     self.__decodeProcess.stdout.close()
     self.__decodeProcess.kill()
     self.__resultPIPE.set_error()
+
+  def wait(self):
+    if self.__decodeThread:
+      self.__decodeThread.join()

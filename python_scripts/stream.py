@@ -189,10 +189,10 @@ class StreamRecorder(StateFlag):
           break
         else:
           if self.__binary:
-            self.__streamPIPE.put( BVector(data,endpoint=False) )
+            self.__streamPIPE.put( BVector(data,dtype=self.__format,endpoint=False) )
           else:
             for ele in np.frombuffer(data,dtype=self.__format):
-              self.__streamPIPE.put( Element(int(ele),endpoint=False) )
+              self.__streamPIPE.put( Element(ele,endpoint=False) )
     except Exception as e:
       self.__set_error()
       raise e
@@ -218,6 +218,10 @@ class StreamRecorder(StateFlag):
   def stop_recording(self):
     '''The main API to stop stream.'''
     self.shift_state_to_termination()
+
+  def wait(self):
+    if self.__recordThread:
+      self.__recordThread.join()
 
 class StreamReader(StateFlag):
   '''
@@ -264,11 +268,9 @@ class StreamReader(StateFlag):
     else:
       self.__paFormat = pyaudio.paInt32
       self.__format = "int32"
-
-    self.__bsize = Width * Channels * Points
     
-    return namedtuple("AudioInfo",["rate","channels","width","points","bsize"])(
-                                    Rate,Channels,Width,Points,self.__bsize)
+    return namedtuple("AudioInfo",["rate","channels","width"])(
+                                    Rate,Channels,Width)
 
   def get_audio_info(self):
     return self.__streamPIPE.get_extra_info()
@@ -300,10 +302,10 @@ class StreamReader(StateFlag):
           break
         else:
           if self.__binary:
-            self.__streamPIPE.put( BVector(data,endpoint=False) )
+            self.__streamPIPE.put( BVector(data,dtype=self.__format,endpoint=False) )
           else:
             for ele in np.frombuffer(data,dtype=self.__format):
-              self.__streamPIPE.put( Element(int(ele),endpoint=False) )
+              self.__streamPIPE.put( Element(ele,endpoint=False) )
 
         internal = self.__timeSpan - round( (time.time()-st),4)
         if internal > 0:
@@ -336,6 +338,10 @@ class StreamReader(StateFlag):
     '''The main API to stop stream.'''
     self.shift_state_to_termination()
 
+  def wait(self):
+    if self.__readThread:
+      self.__readThread.join()
+
 class FrameCutter(StateFlag):
   '''
   A class to cut frame.
@@ -349,7 +355,9 @@ class FrameCutter(StateFlag):
     self.__cover = width - shift
     self.__streamBuffer = np.zeros([width,],dtype="int16")
     self.__framePIPE = PIPE()
+    self.__elementCache = PIPE()
 
+    self.__cutThread = None
     self.__reset_position_flag()
   
   def __reset_position_flag(self):
@@ -384,22 +392,8 @@ class FrameCutter(StateFlag):
       pos = self.__cover
 
     while pos < self.__width:
-      if streamPIPE.is_error():
-        self.__set_error()
-        return False
-      elif streamPIPE.is_exhaustion():
-        self.__terminationStep = True
-        break
-      elif streamPIPE.is_empty():
-        time.sleep(TIMESCALE)
-        timeCost += TIMESCALE
-        if timeCost > TIMEOUT:
-          streamPIPE.set_error()
-          self.__set_error()
-          return False
-      else:
-        ele = streamPIPE.get()
-        assert isinstance(ele,Element)
+      if not self.__elementCache.is_empty():
+        ele = self.__elementCache.get()
         if addedNewData:
           self.__streamBuffer[pos] = ele.item
           pos += 1
@@ -412,7 +406,37 @@ class FrameCutter(StateFlag):
           self.__streamBuffer[pos] = ele.item
           pos += 1
           addedNewData = True
-    
+      else:
+        if streamPIPE.is_error():
+          self.__set_error()
+          return False
+        elif streamPIPE.is_exhaustion():
+          self.__terminationStep = True
+          break
+        elif streamPIPE.is_empty():
+          time.sleep(TIMESCALE)
+          timeCost += TIMESCALE
+          if timeCost > TIMEOUT:
+            streamPIPE.set_error()
+            self.__set_error()
+            return False
+        else:
+          pac = streamPIPE.get()
+          if isinstance(pac,Element):
+            self.__elementCache.put(pac)
+            continue
+          elif isinstance(pac,(Vector,BVector)):
+            if isinstance(pac,BVector):
+              pac = pac.decode()
+            item = pac.item
+            if pac.is_endpoint():
+              self.__elementCache.put( Element(item[0],endpoint=True) )
+            else:
+              for ele in item:
+                self.__elementCache.put( Element(ele,endpoint=False) )
+          else:
+            raise Exception(f'Unknown packet: {type(pac).__name__}')
+          
     if pos == 0:
       self.__set_termination()
       return False
@@ -457,6 +481,10 @@ class FrameCutter(StateFlag):
 
   def get_frame_pipe(self):
     return self.__framePIPE
+  
+  def wait(self):
+    if self.__cutThread:
+      self.__cutThread.join()
 
 class ActivityDetector(StateFlag):
 
@@ -472,6 +500,8 @@ class ActivityDetector(StateFlag):
     self.vad_function = None
     self.__detectThread = None
     self.__reset_position_flag()
+
+    self.__detectThread = None
   
   def __reset_position_flag(self):
     self.__terminationStep = False
@@ -507,7 +537,7 @@ class ActivityDetector(StateFlag):
           return False
       else:
         vec = framePIPE.get()
-        assert isinstance(vec,Vector)
+        assert isinstance(vec,Vector), f"Activity Detector needs Vector packet but got: {type(vec).__name__}."
         if pos != 0:
           self.__frameBuffer[pos,:] = vec.item
           pos += 1
@@ -580,3 +610,7 @@ class ActivityDetector(StateFlag):
 
   def get_frame_pipe(self):
     return self.__newFramePIPE
+
+  def wait(self):
+    if self.__detectThread:
+      self.__detectThread.join()

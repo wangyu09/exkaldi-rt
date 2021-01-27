@@ -390,6 +390,10 @@ class FeatureExtractor(StateFlag):
   def get_feature_pipe(self):
     return self.__featurePIPE
 
+  def wait(self):
+    if self.__extractThread:
+      self.__extractThread.join()
+
 class SpectrogramExtractor(FeatureExtractor):
 
   def __init__(self,frameDim=400,chunkFrames=10,
@@ -775,3 +779,7 @@ class FeatureProcessor(StateFlag):
     self.__processThread = threading.Thread(target=self.__process_feature, args=(rawFeaturePIPE,))
     self.__processThread.setDaemon(True)
     self.__processThread.start()
+
+  def wait(self):
+    if self.__processThread:
+      self.__processThread.join()

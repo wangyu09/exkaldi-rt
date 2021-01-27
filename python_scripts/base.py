@@ -137,23 +137,50 @@ class Packet:
 
 class Element(Packet):
   def __init__(self,item,endpoint=False):
-    assert isinstance(item,(int,float)), "Element packet must be int or float value."
+    if isinstance(item,int):
+      item = np.int16(item)
+    elif isinstance(item,float):
+      item = np.int32(item)
+    else:
+      assert isinstance(item,(np.int8,np.int16,np.int32,
+                             np.float16,np.float32,np.float64)), "Element packet must be int or float value."
     super().__init__(item,endpoint)
-
+  
+  @property
+  def dtype(self):
+    return str(self.item.dtype)
+  
 class Vector(Packet):
   def __init__(self,item,endpoint=False):
     assert isinstance(item,np.ndarray) and len(item.shape) == 1, "Vector packet must be 1-d numpy array."
     super().__init__(item,endpoint) 
 
+  @property
+  def dtype(self):
+    return str(self.item.dtype)
+  
 class BVector(Packet):
-  def __init__(self,item,endpoint=False):
+  def __init__(self,item,dtype,endpoint=False):
     assert isinstance(item,bytes), "BVector packet must be bytes object."
+    assert dtype in ["int16","float32"]
     super().__init__(item,endpoint)
+    self.__dtype = dtype
+  
+  @property
+  def dtype(self):
+    return self.__dtype
+  
+  def decode(self):
+    return Vector(np.frombuffer(self.item,dtype=self.__dtype),endpoint=self.is_endpoint())
 
 class Best1(Packet):
   def __init__(self,item,endpoint=False):
     assert isinstance(item,str), "Best1 packet must be string."
     super().__init__(item,endpoint)
+  
+  @property
+  def dtype(self):
+    return "str"
 
 '''Other tools'''
 # the object to pass intermediate data
