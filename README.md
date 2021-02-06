@@ -1,5 +1,5 @@
 # ExKaldi2: An Online Speech Recognition Toolkit for Python
-![exkaldi2](https://github.com/wangyu09/exkaldi-online/workflows/exkaldionline/badge.svg)
+![exkaldi2](https://github.com/wangyu09/exkaldi2/workflows/exkaldi2/badge.svg)
 
 This kaldi using acff3f65640715f22252f143df7c3e1997899163 commit.
 
@@ -9,7 +9,7 @@ Before installing ExKaldi2, please ensure that Kaldi has been installed and comp
 
 1. Clone ExKaldi2 repository.
 ```shell
-git clone https://github.com/wangyu09/exkaldi-online.git
+git clone https://github.com/wangyu09/exkaldi2.git
 ``` 
 
 2. Copy these directories into Kaldi source folder.
