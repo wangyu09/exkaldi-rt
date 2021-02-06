@@ -23,15 +23,15 @@ setup(
     version=read_version_info(),
     author="Wang Yu",
     author_email="wangyu@alps-lab.org",
-    description="ExKaldi Online Automatic Speech Recognition Toolkit",
+    description="ExKaldi2: An Online Speech Recognition Toolkit for Python",
     long_description=long_description,
     long_description_content_type=os.path.join("text","markdown"),
-    url="https://github.com/wangyu09/exkaldi-online",
+    url="https://github.com/wangyu09/exkaldi2",
     packages=find_packages(),#["python_scripts",],#find_packages(),
     #data_files = [
     #        (os.path.join("exkaldisrc","tools"), glob.glob( os.path.join("tools","*")))
     #    ],
-    install_requires=["numpy>=1.16","PyAudio"],
+    install_requires=["numpy>=1.16","PyAudio","webrtcvad"],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: Apache Software License",

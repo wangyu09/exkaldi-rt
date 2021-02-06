@@ -1,6 +1,24 @@
 # ExKaldi2: An Online Speech Recognition Toolkit for Python
 ![exkaldi2](https://github.com/wangyu09/exkaldi2/workflows/exkaldi2/badge.svg)
 
+ExKaldi2 is an online ASR toolkit for Python language.
+It based on Kaldi lattice faster decoder.
+
+ExKaldi2 has these features:
+
+1. We provided a basic vad function with Google webrtc, 
+but you can apply your own VAD function, such as DNN
+vad function trained with DL frameworks.
+
+2. It supported extracting Spectrogram, fBank, MFCC acoustic feature in current version. Basides, you can design your own feature function.
+
+3. ExKaldi2 uses DNN acoustic model trained with DL framesworks.
+In current version, we only support WFST online decoder. 
+
+4. It's easy to use RNN LM trained by DL frameworks to rescore N-Best result.
+
+5. Support network transmition.
+
 This kaldi using acff3f65640715f22252f143df7c3e1997899163 commit.
 
 ## Installation
