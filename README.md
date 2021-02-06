@@ -8,7 +8,9 @@ This kaldi using acff3f65640715f22252f143df7c3e1997899163 commit.
 Before installing ExKaldi2, please ensure that Kaldi has been installed and compiled successfully.
 
 1. Clone ExKaldi2 repository.
-```git clone https://github.com/wangyu09/exkaldi-online.git``` 
+```shell
+git clone https://github.com/wangyu09/exkaldi-online.git
+``` 
 
 2. Copy these directories into Kaldi source folder.
 ```shell
@@ -27,13 +29,13 @@ make
 ```
 
 4. Go back to exkaldi-online derectory and install ExKaldi2 python package.
-```
+```shell
 sudo apt-get install libportaudio2
 bash quick_install.sh
 ```
 
 5. Check.
-```
+```shell
 python -c "import exkaldi2"
 ```
 
