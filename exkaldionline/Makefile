@@ -5,7 +5,7 @@ include ../kaldi.mk
 
 TESTFILES =
 
-OBJFILES = exkaldi-online-decoding.o online-endpoint.o
+OBJFILES = exkaldi-online-decoding.o
 
 LIBNAME = exkaldi-online
 
@@ -15,10 +15,7 @@ ADDLIBS = ../ivector/kaldi-ivector.a ../nnet3/kaldi-nnet3.a \
           ../lat/kaldi-lat.a ../hmm/kaldi-hmm.a ../feat/kaldi-feat.a \
           ../transform/kaldi-transform.a ../gmm/kaldi-gmm.a \
           ../tree/kaldi-tree.a ../util/kaldi-util.a ../matrix/kaldi-matrix.a \
-          ../base/kaldi-base.a 
-
-
-
+          ../base/kaldi-base.a ../online2/kaldi-online2.a
 
 include ../makefiles/default_rules.mk
 
