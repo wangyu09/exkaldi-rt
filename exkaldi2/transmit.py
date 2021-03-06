@@ -22,7 +22,7 @@ from collections import namedtuple
 import numpy as np
 from io import BytesIO
 
-from exkaldi2.base import StateFlag, Component,PIPE,Vector,Element,BVector,Text
+from exkaldi2.base import ExKaldi2Base,Component,PIPE,Vector,Element,Text
 from exkaldi2.base import info
 
 socket.setdefaulttimeout(info.TIMEOUT)
@@ -116,29 +116,32 @@ def decode_text_packet(pointer):
   res = pointer.read().decode().strip()
   return Text(res,endpoint=flag)
 
-class SendProtocol:
-  def __init__(self,thost,tport=9509,retry=10):
+class SendProtocol(ExKaldi2Base):
+
+  def __init__(self,thost,tport=9509,name=None):
+    super().__init__(name=name)
     self.__client = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-    print(f'Target Address: ({thost},{tport}). Try to connect...')
+    print(f"{self.name}: Target Address is ({thost},{tport}). Connect...")
     self.__client.connect((thost,tport),)
-    print("Connect Done!")
-    self.__retry = retry
+    print(f"{self.name}: Connected!")
     self.__raddr = (thost,tport)
   
   def send(self,message):
+    assert isinstance(message,bytes)
+    # 4 bytes to mark message size
     bsize = np.uint32(len(message)).tobytes()
     counter = 0
     while True:
-      self.__client.sendall( bsize + message)
+      self.__client.sendall( bsize + message )
       respon = self.__client.recv(1)
       if respon == b'0':
         break
       elif respon == b'1':
         counter += 1
-        if counter >= self.__retry:
-          raise Exception("Failed to send the message.")
+        if counter >= info.SOCKET_RETRY:
+          raise Exception(f"{self.name}: Failed to send the message!")
       else:
-        raise Exception(f'Unknown flag: {respon}')
+        raise Exception(f"{self.name}: Unknown flag: {respon}!")
 
   def close(self):
     self.__client.close()
@@ -146,16 +149,17 @@ class SendProtocol:
   def get_remote_addr(self):
     return self.__raddr
 
-class ReceiveProtocol:
+class ReceiveProtocol(ExKaldi2Base):
   
-  def __init__(self,bport=9509):
+  def __init__(self,bport=9509,name=None):
+    super().__init__(name=name)
     bhost = get_host_ip()
     self.__server = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     self.__server.bind((bhost,bport),)
-    print(f'Host Address: ({bhost},{bport}). Listening ...')
+    print(f"{self.name}: Host address is ({bhost},{bport}). Listening ...")
     self.__server.listen(1)
     self.__client, self.__raddr = self.__server.accept()
-    print(f'Connect Done! Remote Address: {self.__raddr[0]}, {self.__raddr[1]}')
+    print(f"{self.name}: Connected! Remote address is ({self.__raddr[0]}, {self.__raddr[1]}).")
     self.__baddr = (bhost,bport)
 
   def get_host_addr(self):
@@ -182,19 +186,17 @@ class ReceiveProtocol:
     self.__client.close()
     self.__server
 
-class PacketSender(StateFlag):
+class ElementSender(Component):
   
-  def __init__(self,thost,tport,batchSize):
-    super().__init__()
-    assert isinstance(batchSize,int) and batchSize > 0, '<batchSize> must be a positive int value.'
-    self.__proto = SendProtocol(thost,tport,retry=info.SOCKET_RETRY)
+  def __init__(self,thost,tport,batchSize,name=None):
+    super().__init__(name=name)
+    assert isinstance(batchSize,int) and batchSize > 0, f"{self.name}: <batchSize> must be a positive int value."
+    self.__proto = SendProtocol(thost, tport, name=self.name+" Send Protocol")
     self.__batchSize = batchSize
     self.__inputBuffer = []
-    self.__sendThread = None
-
     self.encode_function = None
   
-  def __prepare_chunk_packet(self,inPIPE):
+  def __prepare_chunk_packet(self,elePIPE):
     timeCost = 0
     pos = 0
     while pos < self.__batchSize:
@@ -258,7 +260,7 @@ class PacketSender(StateFlag):
   def __set_termination(self):
     self.__proto.send(b"2") # flag(2->error)
 
-  def start_sending(self,inPIPE):
+  def start(self,inPIPE:PIPE):
     # send the wave information
     extraInfo = inPIPE.get_extra_info()
     assert extraInfo is not None, "Miss Audio Info in inpute PIPE."
@@ -272,11 +274,7 @@ class PacketSender(StateFlag):
     self.__sendThread.setDaemon(True)
     self.__sendThread.start()
 
-  def wait(self):
-    if self.__sendThread:
-      self.__sendThread.join()
-
-class PacketReceiver(StateFlag):
+class PacketReceiver(Component):
 
   def __init__(self,bport=9509):
     super().__init__()

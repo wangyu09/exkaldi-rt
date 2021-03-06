@@ -55,8 +55,10 @@ class ExkaldiDecodableOnline: public DecodableInterface
     bool RecieveFrames(const int timeout, const int timescale);
     bool ArrivedLastChunk() { return last_frame_id_ != -1; }
 
-    void Terminate(){ termination_ = true; }
-    bool IsTermination() { return termination_ == true; }
+    void SetEndpoint(){ endpointStep_ = true; }
+    bool IsEndpoint(){ return endpointStep_ == true; }
+    void Terminate(){ finalStep_ = true; }
+    bool IsTermination() { return finalStep_ == true; }
 
   private:
     const ExkaldiDecodableOnlineOptions opts_;
@@ -68,7 +70,8 @@ class ExkaldiDecodableOnline: public DecodableInterface
 
     Matrix<BaseFloat> loglikes_;
     int32 pdf_ids_;
-    bool termination_ = false;
+    bool finalStep_ = false;
+    bool endpointStep_ = false;
 };
 
 struct ExkaldiOnlineDecodingConfig {

@@ -21,18 +21,29 @@ import subprocess
 import numpy as np
 import sys
 import threading
+import ctypes
 import time
+import datetime
+from collections import namedtuple
 
 from exkaldi2.version import version
 
-## Some configs.
 class Info:
-
+  '''
+  A object to define some parameters of ExKaldi2.
+  '''
   def __init__(self):
-    self.__timeout = 10
+    self.__kaldi_existed = False
+    self.__timeout = 30
     self.__timescale = 0.01
+    # Check kaldi root directory and exkaldi tool directory
     self.__cmdroot = self.__find_cmd_root()
+    # Get the float floor
     self.__epsilon = self.__get_floot_floor()
+
+  @property
+  def KALDI_EXISTED(self):
+    return self.__kaldi_existed
 
   @property
   def VERSION(self):
@@ -56,6 +67,7 @@ class Info:
 
   @property
   def SOCKET_RETRY(self):
+    '''Maximum times to resend the packet if packet is lost'''
     return 10
 
   def set_TIMEOUT(self,value):
@@ -67,169 +79,156 @@ class Info:
     self.__timescale = value
 
   def __find_cmd_root(self):
-    '''Look for the exkaldi-online command root path.'''
+    '''Look for the exkaldionline command root path.'''
     if "KALDI_ROOT" in os.environ.keys():
       KALDI_ROOT = os.environ["KALDI_ROOT"]
+      self.__kaldi_existed = True
     else:
       cmd = "which copy-matrix"
       p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=os.environ.copy())
       out, err = p.communicate()
       if out == b'':
-        raise Exception("Kaldi root directory was not found automatically. Please ensure it has been added in environment sucessfully.")
+        print( "Warning: Kaldi root directory was not found automatically. " + \
+               "Module: exkaldi2.feature and exkaldi2.decode are unavaliable."
+              )
+        #raise Exception("Kaldi root directory was not found automatically. Please ensure it has been added in environment sucessfully.")
       else:
         out = out.decode().strip()
         KALDI_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(out)))
+        self.__kaldi_existed = True
 
-    assert os.path.isfile(os.path.join(KALDI_ROOT,"src","exkaldionlinebin","exkaldi-online-decoder")), \
-          "ExKaldi-Online C++ source files have not been compiled sucessfully. " + \
-          "Please consult the Installation in github: https://github.com/wangyu09/exkaldi-online ."
+    if self.__kaldi_existed:
+      assert os.path.isfile(os.path.join(KALDI_ROOT,"src","exkaldionlinebin","exkaldi-online-decoder")), \
+            "ExKaldi2 C++ source files have not been compiled sucessfully. " + \
+            "Please consult the Installation in github: https://github.com/wangyu09/exkaldi2 ."
 
-    return os.path.join(KALDI_ROOT,"src","exkaldionlinebin")
+      return os.path.join(KALDI_ROOT,"src","exkaldionlinebin")
+    else:
+      return None
 
   def __get_floot_floor(self):
     '''Get the floot floor value'''
-    cmd = os.path.join(self.__cmdroot,"get-float-floor")
-    p = subprocess.Popen(cmd,stdout=subprocess.PIPE)
-    (out,_) = p.communicate()
-    return float(out.decode().strip())
+    if self.__cmdroot is None:
+      return 1.19209e-07
+    else:
+      cmd = os.path.join(self.__cmdroot,"get-float-floor")
+      p = subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+      (out,err) = p.communicate()
+      out = out.decode().strip()
+      if len(out) == 0:
+        raise Exception("Failed to get float floor:\n" + err.decode())
+      return float(out)
 
+# Instantiate this object.
 info = Info()
 
-## Base class to describe state of components and pipes
-class StateFlag:
+class KillableThread(threading.Thread):
+  '''
+  This is a killable thread object
+  '''
+  def get_id(self)->int:
+    '''Return the thread id.'''
+    if not self.isAlive():
+      raise threading.ThreadError("The thread is not active.")
 
+    if hasattr(self,'_thread_id'):
+      return self._thread_id
+    for ID, thread in threading._active.items():
+      if thread is self:
+        return ID
+
+    raise AssertionError("Could not determine the thread's id.")
+
+  def kill(self):
+    '''Kill this thread forcely.'''
+    tid = ctypes.c_long( self.get_id() )
+    res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid,ctypes.py_object(SystemExit)) 
+    if res == 0:
+      raise ValueError("Invalid thread id.")
+    elif res > 1: 
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, None) 
+        raise SystemError("PyThreadState_SetAsyncExc failed.")
+
+class ExKaldi2Base:
+  '''
+  Base class to describe state of Components and PIPEs.
+  '''
+  # State Flags
   SILENT = 0
   ALIVE = 1
-  TERMINATION = 2
-  ERROR = 3
+  TERMINATED = 2
+  WRONG = 3
+  # Object Counter
+  OBJ_COUNTER = 0
 
-  def __init__(self):
-    self.__state = StateFlag.SILENT
+  def __init__(self,name=None):
+    # State flag
+    self.__state = ExKaldi2Base.SILENT
+    # Name it
+    self.rename(name=name)
 
-  def is_silent(self):
-    return self.__state == StateFlag.SILENT
+  @property
+  def name(self):
+    return self.__name
 
-  def is_alive(self):
-    return self.__state == StateFlag.ALIVE
+  def rename(self,name=None):
+    '''
+    Rename it.
+    '''
+    if name is None:
+      name = self.__class__.__name__
+    else:
+      assert isinstance(name,str) and len(name) > 0, f"<name> must be a string but got: {name}."
+    self.__name = name + f"[{ExKaldi2Base.OBJ_COUNTER}]"
+    ExKaldi2Base.OBJ_COUNTER += 1
+
+  def is_silent(self) -> bool:
+    return self.__state == ExKaldi2Base.SILENT
+
+  def is_alive(self) -> bool:
+    return self.__state == ExKaldi2Base.ALIVE
   
-  def is_error(self):
-    return self.__state == StateFlag.ERROR
+  def is_wrong(self) -> bool:
+    return self.__state == ExKaldi2Base.WRONG
   
-  def is_termination(self):
-    return self.__state == StateFlag.TERMINATION
+  def is_terminated(self) -> bool:
+    return self.__state == ExKaldi2Base.TERMINATED
   
   def shift_state_to_silent(self):
-    self.__state = StateFlag.SILENT
+    self.__state = ExKaldi2Base.SILENT
 
   def shift_state_to_alive(self):
-    self.__state = StateFlag.ALIVE
+    self.__state = ExKaldi2Base.ALIVE
 
-  def shift_state_to_error(self):
-    self.__state = StateFlag.ERROR
+  def shift_state_to_wrong(self):
+    self.__state = ExKaldi2Base.WRONG
 
-  def shift_state_to_termination(self):
-    self.__state = StateFlag.TERMINATION
+  def shift_state_to_terminated(self):
+    self.__state = ExKaldi2Base.TERMINATED
 
-## PIPE is used to connect components and pass data packets
-class PIPE(StateFlag):
-  '''
-  It is a Last-In-Last-Out queue.
-  '''
-  def __init__(self):
-    super().__init__()
-    self.__cache = queue.Queue()
-    self.__extra_info = None
-    self.shift_state_to_alive() # Defaultly it is activated.
-  
-  def kill(self):
-    self.shift_state_to_error()
-    self.__cache.queue.clear()
-    self.__extra_info = None
-  
-  def stop(self):
-    self.shift_state_to_termination()
-  
-  def is_empty(self):
-    return self.__cache.empty()
+########################################
 
-  def is_exhaustion(self):
-    return self.is_termination() and self.is_empty()
-
-  def clear(self):
-    self.__cache.queue.clear()
-  
-  def size(self):
-    return self.__cache.qsize()
-  
-  def get(self):
-    '''
-    Pop a packet from head.
-    '''
-    if self.is_exhaustion():
-      raise Exception("PIPE has terminated and nothing is left.") 
-    elif self.is_error():
-      raise Exception("Can not get data from a killed PIPE." )
-    return self.__cache.get(timeout=info.TIMEOUT)
-  
-  def put(self,packet):
-    '''
-    Push a new packet to tail.
-    '''
-    if not self.is_alive():
-      raise Exception("Can only append data into ALIVE PIPE." )
-    assert isinstance(packet,Packet), "This is not a Packet object."
-    self.__cache.put(packet)
-  
-  def add_extra_info(self,info=None):
-    '''
-    Add any extra information to this PIPE.
-    '''
-    self.__extra_info = info
-  
-  def get_extra_info(self):
-    '''
-    Get the extra information added to this PIPE.
-    '''
-    return self.__extra_info
-
-  def to_list(self,deep=True):
-    '''
-    Convert PIPE to list.
-    
-    Args:
-      _deep_: If True, return list of values. Or return list of packets.
-    '''
-    assert isinstance(deep,bool), "<deep> need a bool value."
-    size = self.size()
-    if deep:
-      return [ (self.__cache.get()).data for i in range(size) ]
-    else:
-      return [ self.__cache.get() for i in range(size) ]
-
-## Packet is used to hold various stream data
-## These data will be processed by Component and passed in PIPE
 class Packet:
-
-  def __init__(self,data,endpoint=False):
-    assert isinstance(endpoint,bool), "<endpoint> need a bool value."
+  '''
+  Packet object is used to hold various stream data, such as audio stream, feature and probability.
+  These data will be processed by Component and passed in PIPE.
+  '''
+  def __init__(self,data):
     self.__data = data
-    self.__endpoint = endpoint
 
   @property
   def data(self):
     return self.__data
 
-  def is_endpoint(self):
-    return self.__endpoint
-
   @property
   def dtype(self):
     raise Exception("Please implement this function.")
 
-## Element packet hold singal value data.
 class Element(Packet):
-  
-  def __init__(self,data,endpoint=False):
+  '''
+  Element packet hold single value data.
+  '''
+  def __init__(self,data):
     if isinstance(data,int):
       data = np.int16(data)
     elif isinstance(data,float):
@@ -237,213 +236,537 @@ class Element(Packet):
     else:
       assert isinstance(data,(np.int8,np.int16,np.int32,
                              np.float16,np.float32,np.float64)), "Element packet must be int or float value."
-    super().__init__(data,endpoint)
+    super().__init__(data)
   
   @property
-  def dtype(self):
+  def dtype(self) -> str:
     return str(self.data.dtype)
 
-## Vector packet hold 1-d array data.
 class Vector(Packet):
-
-  def __init__(self,data,endpoint=False):
+  '''
+  Vector packet hold 1-d NumPy array data.
+  '''
+  def __init__(self,data):
     assert isinstance(data,np.ndarray) and len(data.shape) == 1, "Vector packet must be 1-d NumPy array."
-    super().__init__(data,endpoint) 
+    super().__init__(data) 
 
   @property
-  def dtype(self):
+  def dtype(self) -> str:
     return str(self.data.dtype)
 
-## BVector packet hold 1-d array data with bytes format.
-class BVector(Packet):
-
-  def __init__(self,data,dtype,endpoint=False):
-    assert isinstance(data,bytes), "BVector packet must be bytes object."
-    assert dtype in ["int16","float32"]
-    super().__init__(data,endpoint)
-    self.__dtype = dtype
-  
-  @property
-  def dtype(self):
-    return self.__dtype
-  
-  def decode(self):
-    return Vector(np.frombuffer(self.data,dtype=self.__dtype),endpoint=self.is_endpoint())
-
-## Text packet hold the top 1 best decoding result.
 class Text(Packet):
-
-  def __init__(self,data,endpoint=False):
+  '''
+  Text packet hold the top 1-best decoding result.
+  '''
+  def __init__(self,data):
     assert isinstance(data,str), "Text packet must be string."
-    super().__init__(data,endpoint)
+    super().__init__(data)
   
   @property
-  def dtype(self):
+  def dtype(self) -> str:
     return "str"
 
-## Component is used to process packets
-class Component(StateFlag):
+class Endpoint(Packet):
+  '''
+  A special flag to mark endpoint.
+  '''
+  pass
 
-  def __init__(self,name="compnent"):
-    super().__init__()
-    self.__name = name
+# Instantiate this object.
+ENDPOINT = Endpoint(None)
+
+def is_endpoint(obj):
+  '''
+  If this is Endpoint, return True.
+  '''
+  return isinstance(obj,Endpoint)
+
+########################################
+
+class PIPE(ExKaldi2Base):
+  '''
+  PIPE is used to connect Components and pass Packets.
+  It is a Last-In-Last-Out queue.
+  Note that we will forcely:
+  1. remove continuous Endpoint flags.
+  2. discard the head packet if it is Endpoint flag.
+  '''
+  def __init__(self,name=None):
+    # Initial state and name
+    super().__init__(name=name)
+    # Set cache
+    self.__cache = queue.Queue()
+    # Set some flags
+    self.reset()
+
+  def reset(self):
+    '''
+    initialize or reset some flags.
+    '''
+    self.__cache.queue.clear()
+    self.__extra_info = None
+    self.shift_state_to_alive()
+    # a flag to remove continue ENDPOINT or head ENDPOINT 
+    self.__last_added_endpoint = True 
+    # a flag to mark whether this PIPE is blocked
+    self.__blocked = False 
+    # flags to report time points
+    self.__firstPut = None
+    self.__lastPut = None
+    self.__firstGet = None
+    self.__lastGet = None
+  
+  def kill(self):
+    '''
+    Kill this PIPE with state: WRONG.
+    '''
+    self.shift_state_to_wrong()
+    self.__cache.queue.clear()
+    self.__extra_info = None
+  
+  def stop(self):
+    '''
+    Stop this PIPE state with: TERMINATED.
+    You can still get data from this PIPE till it becomes exhaustion.
+    '''
+    self.shift_state_to_terminated()
+    # unblock the PIPE automatically
+    self.unblock() 
+  
+  def is_empty(self)->bool:
+    '''
+    If there is no any data in PIPE, return True.
+    '''
+    return self.__cache.empty()
+
+  def is_blocked(self)->bool:
+    '''
+    Return True if PIPE is blocked.
+    '''
+    return self.__blocked
+
+  def is_exhausted(self)->bool:
+    '''
+    If there is no more data in PIPE, return True.
+    '''
+    return self.is_terminated() and self.is_empty()
+
+  def clear(self):
+    '''
+    Clear the cache.
+    '''
+    self.__cache.queue.clear()
+  
+  def size(self):
+    '''
+    Get the size.
+    '''
+    return self.__cache.qsize()
+  
+  def get(self)->Packet:
+    '''
+    Pop a packet from head.
+    '''
+    if self.is_exhausted():
+      raise Exception(f"{self.name}: No more data in PIPE.") 
+    elif self.is_wrong():
+      raise Exception(f"{self.name}: Can not get packet from a wrong PIPE." )
+    elif self.is_blocked():
+      raise Exception(f"{self.name}: Can not get packet from a blocked PIPE.") 
+    
+    packet = self.__cache.get(timeout=info.TIMEOUT)
+
+    if self.__firstGet is None:
+      self.__firstGet = datetime.datetime.now()
+    self.__lastGet = datetime.datetime.now()
+
+    return packet
+  
+  def put(self,packet):
+    '''
+    Push a new packet to tail.
+    Note that: we will remove the continuous Endpoint.
+    '''
+    if not self.is_alive():
+      raise Exception(f"{self.name}: Can only put packet into an alive PIPE." )
+    assert isinstance(packet,Packet), f"{self.name}: Try to put a not-Packet object into PIPE."
+    
+    # record time stamp
+    if self.__firstPut is None:
+      self.__firstPut = datetime.datetime.now()
+    self.__lastPut = datetime.datetime.now()
+      
+    if is_endpoint(packet):
+      if not self.__last_added_endpoint:
+        self.__cache.put(packet)
+        self.__last_added_endpoint = True
+    else:
+      self.__cache.put(packet)
+      self.__last_added_endpoint = False
+  
+  def add_extra_info(self,info=None):
+    '''
+    Add any extra information to PIPE.
+    '''
+    self.__extra_info = info
+  
+  def get_extra_info(self):
+    '''
+    Get the extra information storaged in PIPE.
+    '''
+    return self.__extra_info
+
+  def to_list(self)->list:
+    '''
+    Convert PIPE to lists divided by Endpoint.
+    Only terminated PIPE can be converted.
+    '''
+    assert self.is_terminated(), f"{self.name}: Only terminated PIPE can be converted to list."
+
+    size = self.size()
+    result = []
+    partial = []
+    for i in range(size):
+      packet = self.__cache.get()
+      if is_endpoint(packet) and len(partial)>0:
+        result.append( partial )
+        partial = []
+      else:
+        partial.append( packet.data )
+    if len(partial)>0:
+      result.append( partial )
+    return result[0] if len(result) == 1 else result
+
+  def block(self):
+    '''Block this PIPE so that it is unable to get data from it until unblocked or terminated.'''
+    self.__blocked = True
+  
+  def unblock(self):
+    '''
+    Unblock PIPE.
+    '''
+    self.__blocked = False
+
+  def report_time(self):
+    '''
+    Report time information.
+    '''
+    return namedtuple("TimeReport",["name","firstPut","lastPut","firstGet","lastGet"])(
+                  self.name,self.__firstPut,self.__lastPut,self.__firstGet,self.__lastGet
+                )
+
+class Component(ExKaldi2Base):
+  '''
+  Components are used to process Packets.
+  '''
+  def __init__(self,name=None):
+    # Initial state and name
+    super().__init__(name=name)
+    # Define an output PIPE
+    self.__outPIPE = PIPE(name=self.name+" output PIPE")
+    # Each Component has a core thread to run a function to process packets.
     self.__coreThread = None
 
+  def reset(self):
+    '''
+    Clear and reset Component.
+    '''
+    if self.is_alive():
+      raise Exception(f"{self.name}: Can not reset a ALIVE Component, please stop it firstly.")
+    self.__coreThread = None
+    self.outPIPE.reset()
+    self.shift_state_to_silent()
+
   @property
-  def coreThread(self)->threading.Thread:
+  def coreThread(self)->KillableThread:
+    '''
+    Get the core thread.
+    '''
     return self.__coreThread
 
   @property
-  def name(self):
-    return self.__name
-  
-  # Please implement it
-  @property
   def outPIPE(self)->PIPE:
-    raise Exception("Please implement this function.")
+    return self.__outPIPE
   
   def start(self,inPIPE:PIPE):
-    '''Start run a thread to process packets in inPIPE.'''
+    '''
+    Start running a thread to process Packets in inPIPE.
+    '''
     self.shift_state_to_alive()
-    self.__coreThread = self._start(inPIPE)
-    assert isinstance(self.__coreThread,threading.Thread), "The function _start must return a threading.Thread object!"
+    self.__coreThread = self._start(inPIPE=inPIPE)
+    assert isinstance(self.__coreThread,threading.Thread), f"{self.name}: The function _start must return a threading.Thread object!"
   
   # Please implement it
   # This function must return a threading.Thread object.
   def _start(self,inPIPE)->threading.Thread:
-    raise Exception("Please implement this function.")
+    raise Exception(f"{self.name}: Please implement the ._start function.")
 
   def stop(self):
-    '''Terminate this component normally.'''
-    self.shift_state_to_termination()
+    '''
+    Terminate this component normally.
+    Note that we do not terminate the core thread by this function.
+    We hope the core thread can be terminated with a mild way.
+    '''
+    # Change state
+    self.shift_state_to_terminated()
+    # Append an ENDPOINT flag into output PIPE then terminate it
+    self.outPIPE.put( ENDPOINT )
     self.outPIPE.stop()
   
   def kill(self):
-    '''Terminate this component with error state.'''
-    self.shift_state_to_error()
+    '''
+    Terminate this component with state: WRONG.
+    It means errors occurred somewhere.
+    Note that we do not kill the core thread by this function.
+    We hope the core thread can be terminated with a mild way.
+    '''
+    # Change state
+    self.shift_state_to_wrong()
+    # Kill output PIPE in order to pass error state to the succeeding components
     self.outPIPE.kill()
   
   def wait(self):
-    '''Wait until thread finished.'''
+    '''
+    Wait until the core thread is finished.
+    '''
     if self.coreThread is None:
-      raise Exception("Component has not been started.")
+      raise Exception(f"{self.name}: Component has not been started.")
     else:
       self.coreThread.join()
 
-## Chain is a container to manage the sequential Component-PIPEs
-class Chain(StateFlag):
+  def block(self):
+    '''Block the output PIPE.'''
+    self.outPIPE.block()
+  
+  def is_blocked(self):
+    '''Return True if the output PIPE is blocked.'''
+    self.outPIPE.is_blocked()
+  
+  def unblock(self):
+    '''Unblock the output PIPE.'''
+    self.outPIPE.unblock()
 
-  def __init__(self):
-    super().__init__()
+class Chain(ExKaldi2Base):
+  '''
+  Chain is a container to easily manage the sequential Component-PIPEs.
+  '''
+  def __init__(self,name=None):
+    # Initial state and name
+    super().__init__(name=name)
+    # A container to hold components
     self.__chain = []
+    # Mark the component
+    self.__blockedFlag = []
+    # Component name -> Index
     self.__name2id = {}
 
-  def check_chain(self):
-    '''Do some checks'''
-    assert len(self.__chain) > 0, "Chain is empty."
+  def reset(self):
+    '''
+    Reset the Chain.
+    We will reset all components in it.
+    '''
+    if self.is_alive():
+      raise Exception(f"{self.name}: Can not reset a ALIVE Chain, please stop it firstly.")
+    # Reset all components
+    for comp,block in zip(self.__chain,self.__blockedFlag):
+      comp.reset()
+      if block:
+        comp.block()
+    # Reset State
+    self.shift_state_to_silent()
 
-  def add(self,component):
-    '''Add a new component to the tail of chain.'''
-    assert self.is_silent(), "Can only add new component into a silent chain."
-    assert isinstance(component,Component), "Need Component object."
+  def check_chain(self):
+    '''
+    Do some checks.
+    '''
+    assert len(self.__chain) > 0, f"{self.name}: Chain is empty."
+
+  def add(self,component,block=False):
+    '''
+    Add a new component to the tail of chain.
+    
+    Args:
+      _block_: If True, we will block this Component.
+    '''
+    assert self.is_silent(), f"{self.name}: Can only add new component into a silent chain."
+    assert isinstance(component,Component), f"{self.name}: <component> of .add method must be a Component object."
+    assert isinstance(block,bool), f"{self.name}: <block>  of .add method be a bool value."
+    if block:
+      component.block()
     self.__chain.append(component)
+    self.__blockedFlag.append(block)
   
-  def start(self):
-    # check if this is a empty chain.
+  def start(self,inPIPE=None):
+    '''
+    Start processing thread.
+    '''
     self.check_chain()
-    # link and run all components
-    previousPIPE = None
+    # Link and run all components.
+    previousPIPE = inPIPE
     for i in range(len(self.__chain)):
       self.__chain[i].start(inPIPE=previousPIPE)
       previousPIPE = self.__chain[i].outPIPE
-    # set silent flag
+    # Set state
     self.shift_state_to_alive()
   
   def stop(self):
-    # check if this is a empty chain.
+    '''
+    Stop processing thread normally.
+    '''
+    # Check.
     self.check_chain()
-    # stop the first component and wait the last component
+    # Stop the first Component.
     self.__chain[0].stop()
-    self.__chain[-1].wait()
-    # set chain state
-    self.shift_state_to_termination()
+    #self.__chain[-1].wait()
+    # Set chain state.
+    self.shift_state_to_terminated()
   
   def kill(self):
-    # check if this is a empty chain.
+    '''
+    Kill processing thread with error state.
+    '''
+    # check.
     self.check_chain()
-    # kill all components
+    # Kill all components.
     for i in range(len(self.__chain)):
       self.__chain[i].kill()
-    # set chain state
-    self.shift_state_to_error()
+    # Set chain state.
+    self.shift_state_to_wrong()
 
   def wait(self):
-    # check if this is a empty chain.
+    '''
+    Wait processing thread.
+    '''
+    # Check.
     self.check_chain()
-    # wait the last component
+    # Wait the last Component.
     self.__chain[-1].wait()
+    # Change state
+    self.shift_state_to_terminated()
   
   @property
-  def outPIPE(self):
-    # check the chain
+  def outPIPE(self)->PIPE:
+    '''
+    Get the output PIPE.
+    '''
+    # Check.
     self.check_chain()
-    # return the output PIPE
+    # Return the output PIPE.
     return self.__chain[-1].outPIPE
   
-  def get_component(self,name)->Component:
-    if name not in self.__name2id.keys():
-      raise Exception(f"No such component: {name}")
-    ID = self.__name2id[name]
-    return self.__chain[ID]
+  def component(self,name=None,ID=None)->Component:
+    '''
+    Get the component by calling its name.
+    
+    Args:
+      _name_: the name of Component.
+      _ID_: the index number of Component.
+    '''
+    assert not (name is None and ID is None), f"{self.name}: Both <name> and <ID> are None."
 
-  def get(self):
-    # check the chain
+    if name is not None:
+      assert ID is None
+      if name not in self.__name2id.keys():
+        raise Exception(f"{self.name}: No such Component: {name}")
+      ID = self.__name2id[name]
+      return self.__chain[ID]
+    else:
+      assert isinstance(ID,int)
+      return self.__chain[ID]
+
+  def get(self)->Packet:
+    '''
+    Get a Packet from the output PIPE.
+    '''
     self.check_chain()
-    # Get a packet from output PIPE
     return self.__chain[-1].outPIPE.get()
 
-# A tool for debug
-def wait_and_dynamic_display(target,items=["is_endpoint","data"]):
+  # Overwrite this function
+  def is_wrong(self):
+    if super().is_wrong():
+      return True
+    else:
+      for comp in self.__chain:
+        if comp.is_wrong():
+          return True
+      
+      return False
+  
+  # Overwrite this function
+  def is_terminated(self):
+    return super().is_terminated() or self.__chain[-1].is_terminated()
+
+def dynamic_run(target,inPIPE=None,items=["data"]):
   '''
+  This is a tool for debug or testing.
   Wait the target and display the packets of its outPIPE dynamically.
 
   Args:
     _target_: a Component or Chain object.
+    _inPIPE_: the input PIPE if necessary.
     _items_: choose what info to display. All items must be name of attributes or arguments-free methods.  
-            Or it can be a dict of functions to process the packet, like
-            wait_and_dynamic_display(target,items={"is_endpoint":lambda pac,name:pac.is_endpoint()},)
+            Or it can be a dict of functions to process the Packet, like:
+            wait_and_dynamic_display(target,items={"data-shape":lambda x:x.data.shape})
   '''
   assert isinstance(target,(Component,Chain)),"<target> should be a Component or Chain object."
-  assert target.is_alive(), "<target> is not alive."
   assert isinstance(items,(list,dict)),"<items> should be a list of names or dict of functions."
+  assert inPIPE is None or isinstance(inPIPE,PIPE), "<inPIPE> should be None or a PIPE object."
+
+  if target.is_silent():
+    target.start(inPIPE=inPIPE)
+  else:
+    assert target.is_alive(), "<target> must be SILENT or ALIVE Component or Chain."
 
   def default_function(pac,name):
     tar = getattr(pac,name)
     return tar() if callable(tar) else tar
 
-  if isinstance(items,list):
-    items = dict( (name,lambda pac,na:default_function(pac,na)) for name in items )
-
   while True:
-    if target.outPIPE.is_error() or target.outPIPE.is_exhaustion():
+    if target.outPIPE.is_wrong() or target.outPIPE.is_exhausted():
       break
     elif target.outPIPE.is_empty():
       time.sleep(info.TIMESCALE)
     else:
       packet = target.outPIPE.get()
-
-      for name in items.keys():
-        print(f"{name}: ", items[name](packet,name) )
+      if is_endpoint(packet):
+        print(f"----- Endpoint -----")
+        continue
+      if isinstance(items,list):
+        for name in items:
+          print(f"{name}: ", default_function(packet,name) )
+      else:
+        for name in items.keys():
+          print(f"{name}: ", items[name](packet) )
       print()
+  
+  target.wait()
 
-## Define how to encode the vector data in order to send to subprocess
+  #print("########## Time Report ##########")
+  #if inPIPE is not None:
+  #  st = inPIPE.report_time().firstGet
+  #elif isinstance(target,Chain):
+  #  st = target.component(ID=0).outPIPE.report_time().firstPut
+  #else:
+  #  st = target.outPIPE.report_time().firstPut
+  #et = target.outPIPE.report_time().lastPut
+  #print(f"Start Time: {st.year}-{st.month}-{st.day}, {st.hour}:{st.minute}:{st.second}:{st.microsecond}")
+  #print(f"End Time: {et.year}-{et.month}-{et.day}, {et.hour}:{et.minute}:{et.second}:{et.microsecond}")
+  #print(f"Time Cost: {(et-st).total_seconds()} seconds")
+  #print("#################################")
+
 def encode_vector(vec)->bytes:
+  '''
+  Define how to encode the vector data in order to send to subprocess.
+  '''
   return (" " + " ".join( map(str,vec)) + " ").encode()
 
-## A simple function to run shell command
-def run_exkaldi_shell_command(cmd,inputs=None):
+def run_exkaldi_shell_command(cmd,inputs=None)->list:
   '''
-  _inputs_: None or bytes object.
+  A simple function to run shell command.
+
+  Args:
+    _cmd_: a string of a shell command and its arguments.
+    _inputs_: None or bytes object.
   '''
   if inputs is not None:
     assert isinstance(inputs,bytes),""

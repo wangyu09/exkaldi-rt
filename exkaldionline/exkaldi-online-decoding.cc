@@ -80,31 +80,44 @@ bool ExkaldiDecodableOnline::RecieveFrames(const int timeout, const int timescal
 
       //Read Header
       cin >> flag;
-
-      if (flag == -3) {  
+      //std::cerr << "c++ flag :" << flag << std::endl;
+      if (flag == -3){
+        //std::cerr << "arrived -3:" << flag << std::endl;
         Terminate();
         return false;
       }
-
-      cin >> frames;
-      if ( !( frames >0 && frames <= opts_.chunk_frames )) 
-      KALDI_ASSERT( frames >0 && frames <= opts_.chunk_frames);
-      
-      // Read data
-      for (int32 i=0; i<frames; i++){
-        for (int32 j=0; j<pdf_ids_; j++){
-          cin >> loglikes_(i,j);
-        }
+      else if (flag == -2){
+        //std::cerr << "arrived -2:" << flag << std::endl;
+        SetEndpoint();
+        last_frame_id_ = frames_ready_;
+        return false;
       }
+      else if (flag == -1){
 
-      frames_ready_ += frames;
-      available_frames_ = frames;
+        cin >> frames;
+        if ( !( frames >0 && frames <= opts_.chunk_frames )) 
+        KALDI_ASSERT( frames >0 && frames <= opts_.chunk_frames);
+        //std::cout << "c++ arrive here frame :" << frames << std::endl;
+        // Read data
 
-      if (flag == -1){ }
-      else if (flag == -2){ last_frame_id_ = frames_ready_; }
-      else { KALDI_ERR << "Flag must be (-1 -> activtion or -2 -> termination) but got another value:" << flag;}
-      
-      break;
+        //std::ofstream fw;
+        //fw.open("/Work19/wangyu/exkaldi2-1.1.1/examples/debug.txt");
+
+        for (int32 i=0; i<frames; i++){
+          for (int32 j=0; j<pdf_ids_; j++){
+            cin >> loglikes_(i,j);
+            //fw << loglikes_(i,j) << " ";
+          }
+          //fw << std::endl;
+        }
+        //std:: << "c++ arrive here frame :" << frames << std::endl;
+        //throw "for debug";
+        frames_ready_ += frames;
+        available_frames_ = frames;
+
+        break;
+      }
+      else { KALDI_ERR << "Flag must be (-1 -> activity, -2 -> endpoint, -3 -> termination) but got known value:" << flag;}
     }
   }
 

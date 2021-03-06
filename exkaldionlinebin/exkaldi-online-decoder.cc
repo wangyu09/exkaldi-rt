@@ -118,22 +118,29 @@ int main(int argc, char *argv[])
     { 
       // get chunk frames
       bool flag = decoder.RecieveFrames(TIMEOUT,TIMESCALE);
-      if (decoder.IsTermination()) {break;}
-      // decode
-      decoder.AdvanceDecoding();
-      if (decoder.IsLastDecoding()) {break;}
 
-      bool segover = decoder.EndpointDetected(ec_config,frame_shift_in_seconds);
-      if (segover) {break;}
+      //std::err << "arrive return:" << flag << std::endl;
 
-      Lattice lat;
-      decoder.GetBestPath(false, &lat);
+      if (flag)
+      {
+        decoder.AdvanceDecoding();
+        if (decoder.IsLastDecoding()) {break;}
 
-      EmitPartialResult(lat);
-      std::cout << std::endl;
-      std::cout.flush();
+        bool segover = decoder.EndpointDetected(ec_config,frame_shift_in_seconds);
+        if (segover) {break;}
 
+        Lattice lat;
+        decoder.GetBestPath(false, &lat);
+
+        EmitPartialResult(lat);
+        std::cout << std::endl;
+        std::cout.flush();      
+      }
+      else { break; }
+  
     }
+
+    //std::cerr << "arrive break" << std::endl;
 
     if (decoder.IsTermination()) {
       std::cout << "-3 " << std::endl;

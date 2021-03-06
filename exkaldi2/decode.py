@@ -21,9 +21,11 @@ import time
 import subprocess
 import os
 
-from exkaldi2.base import info, Component, PIPE, Vector, Text
+from exkaldi2.base import info, KillableThread 
+from exkaldi2.base import Component, PIPE, Vector, Text
 from exkaldi2.base import encode_vector
 from exkaldi2.feature import apply_floor
+from exkaldi2.base import ENDPOINT, is_endpoint
 
 def softmax(data,axis=1):
 	'''
@@ -89,15 +91,25 @@ def load_symbol_table(filePath):
   
   return table
 
+def get_pdf_dim(hmmFile):
+  assert os.path.isfile(hmmFile), f"No such file: {hmmFile}."
+  cmd = f"hmm-info {hmmFile} | grep pdfs"
+  p = subprocess.Popen(cmd,shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+  out,err = p.communicate()
+  if p.returncode != 0:
+    raise Exception("Failed to get hmm info:\n" + err.decode())
+  else:
+    return int(out.decode().strip().split()[-1])
+
 class AcousticEstimator(Component):
   
   def __init__(self,featDim,batchSize=16,
-                    padFinal=True,applySoftmax=False,applyLog=True,
-                    priors=None,name="estimator"):
+                    applySoftmax=False,applyLog=True,
+                    priors=None,name=None):
     super().__init__(name=name)
+
     assert isinstance(featDim,int) and featDim > 0, "<featDim> must be a positive int value."
     assert isinstance(batchSize,int) and batchSize > 0, "<batchSize> must be a positive int value."
-    assert isinstance(padFinal,bool), "<padFinal> must be a bool value."
     assert isinstance(applySoftmax,bool), "<applySoftmax> must be a bool value."
     assert isinstance(applyLog,bool), "<applyLog> must be a bool value."
     if priors is not None:
@@ -105,24 +117,34 @@ class AcousticEstimator(Component):
 
     self.__featDim = featDim
     self.__batchSize = batchSize
-    self.__probabilityPIPE = PIPE()
     self.__priors = priors
-    self.__memoryCache = None
-    self.__pad = padFinal
     self.__applyLog = applyLog
     self.__applySoftmax = applySoftmax
-
+    # The acoustic function
     self.acoustic_function = None
+    # The work place
     self.__featureBuffer = np.zeros([batchSize,featDim],dtype="float32")
+    # The dim of output probability
     self.__dim = None
-
+    # Set some position flags
     self.__reset_position_flag()
-    self.__estimateThread = None
-  
+    # A cache for RNN acoustic model
+    self.__memoryCache = None    
+
+  def reset(self):
+    '''
+    This method will be called by .reset method.
+    '''
+    super().reset()
+    self.__featureBuffer *= 0
+    self.__reset_position_flag()
+    self.__dim = None
+    self.__memoryCache = None
+
   def __reset_position_flag(self):
-    self.__terminationStep = False
-    self.__avaliableFrames = self.__batchSize
-    # self.set_state(None)
+    self.__endpointStep = False
+    self.__finalStep = False
+    self.__tailIndex = self.__batchSize
 
   def get_prob_dim(self):
     assert self.__dim is not None
@@ -134,107 +156,108 @@ class AcousticEstimator(Component):
   def set_memory(self,data):
     self.__memoryCache = data
 
-  @property
-  def outPIPE(self):
-    return self.__probabilityPIPE
-
   def __prepare_chunk_feature(self,featurePIPE):
     
     timecost = 0
     pos = 0
 
     while pos < self.__batchSize:
-      if featurePIPE.is_error():
+      # If feature PIPE had error
+      if featurePIPE.is_wrong():
         self.kill()
         return False
-      elif featurePIPE.is_exhaustion():
-        if self.__pad:
-          self.__featureBuffer[pos:,:] = 0
-        else:
-          self.__avaliableFrames = pos
-        self.__terminationStep = True
-        return True
+      # If no more data
+      elif featurePIPE.is_exhausted():
+        self.__tailIndex = pos
+        self.__finalStep = True
+        break
+      # If need wait because of receiving no data
       elif featurePIPE.is_empty():
         time.sleep(info.TIMESCALE)
         timecost += info.TIMESCALE
-        if timecost >= info.TIMEOUT:
+        if timecost > info.TIMEOUT:
+          print(f"{self.name}: Timeout! Did not receive any data for a long time！")
+          # Try to kill frame PIPE
           featurePIPE.kill()
+          # Kill self 
           self.kill()
           return False
+      # If need wait because of blocked
+      elif featurePIPE.is_blocked():
+        time.sleep(info.TIMESCALE)
+      # If had data
       else:
         vec = featurePIPE.get()
-        assert isinstance(vec,Vector)
-        if pos != 0:
-          self.__featureBuffer[pos] = vec.data
-          pos += 1
-          if vec.is_endpoint():
-            self.__avaliableFrames = pos
-            self.__terminationStep = True
-            break
+        ## If this is an endpoint
+        if is_endpoint(vec):
+          self.__endpointStep = True
+          self.__tailIndex = pos
+          break
         else:
-          if vec.is_endpoint():
-            continue # discard this element
+          assert isinstance(vec,Vector), f"{self.name}: Need Vector packet but got: {type(vec).__name__}."
           self.__featureBuffer[pos] = vec.data
           pos += 1
-
+    # Set the rest with zero 
+    self.__featureBuffer[pos:,:] = 0
     return True
 
   def __estimate_porbability(self,featurePIPE):
     
-    print("Start estimating acoustic probability!")
+    print(f"{self.name}: Start...")
     try:
       while True:
-        # Prepare chunk feature
-        self.__featureBuffer.flags.writeable = True
+        # Prepare a chunk of frames
         if not self.__prepare_chunk_feature(featurePIPE): 
           break
-        self.__featureBuffer.flags.writeable = False
         # Compute acoustic probability
-        if self.__pad:
-          probs = self.acoustic_function(self.__featureBuffer)
-        else:
-          probs = self.acoustic_function(self.__featureBuffer[:self.__avaliableFrames,:])
-        self.__dim = probs.shape[-1]
-        # Post-process
-        if self.__applySoftmax:
-          probs = softmax(probs,axis=1)
-        if self.__applyLog:
-          #probs = apply_floor(probs)
-          probs = np.log(probs)
-        if self.__priors:
-          assert probs.shape[-1] == len(self.__priors), "priors dimension does not match the output of acoustic function."
-          probs -= self.__priors
-        # Add to PIPE
-        if not self.__probabilityPIPE.is_alive():
+        if self.__tailIndex > 0:
+          probs = self.acoustic_function(self.__featureBuffer[:self.__tailIndex])
+          self.__dim = probs.shape[-1]
+          # Post-process
+          ## Softmax
+          if self.__applySoftmax:
+            probs = softmax(probs,axis=1)
+          ## Log
+          if self.__applyLog:
+            probs = apply_floor(probs)
+            probs = np.log(probs)
+          ## Normalize with priors
+          if self.__priors:
+            assert probs.shape[-1] == len(self.__priors), "priors dimension does not match the output of acoustic function."
+            probs -= self.__priors
+
+        # Append to PIPE
+        if self.is_wrong() or \
+           self.outPIPE.is_wrong() or \
+           self.outPIPE.is_terminated():
           featurePIPE.kill()
           self.kill()
           break
-        for fid in range(self.__avaliableFrames-1):
-          self.__probabilityPIPE.put( Vector(probs[fid],endpoint=False) )
-        if self.__terminationStep:
-          self.__probabilityPIPE.put( Vector(probs[self.__avaliableFrames-1],endpoint=True) )
-          self.__reset_position_flag()
         else:
-          self.__probabilityPIPE.put( Vector(probs[self.__avaliableFrames-1],endpoint=False) )
-        # If no more data
-        if featurePIPE.is_exhaustion():
-          self.stop()
-          break
-    
+          ## Append to PIPE if necessary
+          for i in range(self.__tailIndex):
+            self.outPIPE.put( Vector(probs[i]) )
+          ## If arrived ENDPOINT
+          if self.__endpointStep:
+            self.outPIPE.put( ENDPOINT )
+            self.__reset_position_flag()
+          ## If over
+          if self.__finalStep or self.is_terminated():
+            self.stop()
+            break
     except Exception as e:
       featurePIPE.kill()
       self.kill()
       raise e
-
     finally:
-      print("Stop estimating acoustic probability!")
+      print(f"{self.name}: Stop!")
 
   def _start(self,inPIPE):
 
     if self.acoustic_function is None:
-      raise Exception("Please implement the probability computing function firstly.")
+      raise Exception(f"{self.name}: Please implement the probability computing function firstly.")
     
-    estimateThread = threading.Thread(target=self.__estimate_porbability, args=(inPIPE,))
+    estimateThread = KillableThread(target=self.__estimate_porbability, args=(inPIPE,))
     estimateThread.setDaemon(True)
     estimateThread.start()
 
@@ -247,7 +270,7 @@ class WfstDecoder(Component):
                 latticeBeam=10.0,pruneInterval=25,
                 beamDelta=0.5,hashRatio=2.0,pruneScale=0.1,
                 acousticScale=0.1,lmScale=1,allowPartial=False,
-                minDuration=0.1,name="decoder"):
+                minDuration=0.1,name=None):
     super().__init__(name=name)
     assert isinstance(probDim,int) and probDim > 0, "<probDim> must be a positive int value."
     assert isinstance(batchSize,int) and batchSize > 0, "<batchSize> must be a positive int value."
@@ -275,6 +298,7 @@ class WfstDecoder(Component):
 
     self.__acoustic_scale = acousticScale
 
+    # Config the subprocess command
     cmd = os.path.join(info.CMDROOT,"exkaldi-online-decoder ")
     cmd += f" --beam {beam} " #1
     cmd += f" --max-active {maxActive} " #3
@@ -296,150 +320,197 @@ class WfstDecoder(Component):
     cmd += f" --word-boundary {wordBoundary} " #35
     cmd += f" --timeout { int(info.TIMEOUT*1000) } " #37
     cmd += f" --timescale { int(info.TIMESCALE*1000) } " #39
-
     self.__cmd = cmd
-    self.__resultPIPE = PIPE()
+    # Check the dim of probability
+    pdfs = get_pdf_dim(tmodel)
+    assert probDim == pdfs, "The dimension of probability does not match the pdfs of hmm model. " + \
+                            "You might use a different hmm model. "
+
+    # The work place
     self.__probabilityBuffer = np.zeros([batchSize,probDim],dtype="float32")
     self.__batchSize = batchSize
-
+    # A rescoring fucntions
     self.rescore_function = None
+    # The main subprocess to run the decoding loop
+    self.__decodeProcess = None
+    # A thread to read results from decoding subprocess
+    self.__readResultThread = None
+    # Reset some position flags.
+    self.__reset_position_flag()
 
+  def reset(self):
+    super().reset()
+    self.__probabilityBuffer *= 0
     self.__decodeProcess = None
     self.__readResultThread = None
-
     self.__reset_position_flag()
-  
+
   def ids_to_words(self,IDs):
     assert isinstance(IDs,list)
-    return " ".join([ self.__i2wLexicon[str(ID)] for ID in IDs ])
+    result = []
+    for ID in IDs:
+      ID = str(ID)
+      if ID in self.__i2wLexicon.keys():
+        result.append( self.__i2wLexicon[ID] )
+      else:
+        result.append( "<UNK>" )
+
+    return " ".join(result)
 
   def __reset_position_flag(self):
-    self.__avaliableFrames = self.__batchSize
-    self.__terminationStep = False
-
-  @property
-  def outPIPE(self):
-    return self.__resultPIPE
+    self.__tailIndex = self.__batchSize
+    self.__finalStep = False
+    self.__endpointStep = False
 
   def __read_result_from_subprocess(self):
     '''
     This function is used to open a thread to read result from main decoding process. 
     '''
-    counter = 0
+    timecost = 0
     try:
       while True:
+        # Read
         line = self.__decodeProcess.stdout.readline().decode().strip()
+        # Readed nothing
         if line == "":
           time.sleep(info.TIMESCALE)
-          counter += info.TIMESCALE
-          if counter >= info.TIMEOUT:
+          timecost += info.TIMESCALE
+          if timecost > info.TIMEOUT:
+            print(f"{self.name}: Timeout! Receiving thread has not received any data for a long time！")
             self.kill()
             break
-        elif self.is_error() or self.__resultPIPE.is_error():
-          self.kill()
-          break
-        elif self.is_termination() or self.__resultPIPE.is_termination():
-          self.__decodeProcess.kill()
-          self.stop()
-          break
+        # If error occurred
+        elif self.is_wrong() or \
+             self.outPIPE.is_wrong() or \
+             self.outPIPE.is_terminated():
+            self.kill()
+            break
+
         else:
-          if line.startswith("-1"): # partial result
-            line = line[2:].strip().split() # remove the flag "-1"
-            if len(line) > 1:
-              self.__resultPIPE.put( Text( self.ids_to_words(line),endpoint=False) )
+          #print("result:",line)
+          ## partial result
+          if line.startswith("-1"):
+            line = line[2:].strip().split() # discard the flag "-1"
+            if len(line) > 0:
+              #print(line, self.ids_to_words(line))
+              #self.outPIPE.put( Text( " ".join(line) ) )
+              self.outPIPE.put( Text( self.ids_to_words(line) ) )
+
+          ## Endpoint
           elif line.startswith("-2"): 
-            line = line[5:].strip().split("-1") # remove the flag "-2 -1"
+            line = line[5:].strip().split("-1") # discard the flag "-2 -1"
             if self.rescore_function is None:
-              #print(line[0])
-              self.__resultPIPE.put( Text( self.ids_to_words(line[0].split()),endpoint=True) ) # 
+              line = line[0].strip()
+              if len(line) > 0:
+                self.outPIPE.put( Text( self.ids_to_words(line.split()) ) )
             else:
               nbestsInt = []
               for le in line:
-                nbestsInt.append( [ int(ID) for ID in le.strip().split() ] )
-              best1result = self.rescore_function( nbestsInt )
-              self.__resultPIPE.put( Text( self.ids_to_words(best1result),endpoint=True) )
-          elif line.startswith("-3"): 
+                le = le.strip()
+                if len(le) > 0:
+                  nbestsInt.append( [ int(ID) for ID in le.split() ] )
+              if len(nbestsInt) > 0:
+                best1result = self.rescore_function( nbestsInt )
+                self.outPIPE.put( Text( self.ids_to_words(best1result) ) )
+            ### Add a endpoint flag
+            self.outPIPE.put( ENDPOINT )
+
+          ## Final step
+          elif line.startswith("-3") or self.is_terminated(): 
+            #self.outPIPE.put( ENDPOINT )
+            #!!!! do not stop this componnet
             break
+
           else:
-            raise Exception(f"Expected flag (-1 -> partial) (-2 endpoint) (-3 termination) but got: {line}")
+            raise Exception(f"{self.name}: Expected flag (-1 -> partial) (-2 endpoint) (-3 termination) but got: {line}")
 
     except Exception as e:
       self.kill()
       raise e
 
   def __prepare_chunk_probability(self,probabilityPIPE):
+
     timecost = 0
     pos = 0
+    
     while pos < self.__batchSize:
-      if probabilityPIPE.is_error():
+      # If the previous PIPE had errors
+      if probabilityPIPE.is_wrong():
         self.kill()
         return False
-      elif probabilityPIPE.is_exhaustion():
-        self.__avaliableFrames = pos
-        self.__terminationStep = True
+      # If no more data
+      elif probabilityPIPE.is_exhausted():
+        self.__tailIndex = pos
+        self.__finalStep = True
         break
+      # If need wait because of receiving no data
       elif probabilityPIPE.is_empty():
         time.sleep(info.TIMESCALE)
         timecost += info.TIMESCALE
-        if timecost >= info.TIMEOUT:
+        if timecost > info.TIMEOUT:
+          print(f"{self.name}: Timeout! Did not receive any data for a long time！")
+          # Try to kill frame PIPE
           probabilityPIPE.kill()
+          # Kill self 
           self.kill()
           return False
+      # If need wait because of blocked
+      elif probabilityPIPE.is_blocked():
+        time.sleep(info.TIMESCALE)
+      # If had data
       else:
         vec = probabilityPIPE.get()
-        assert isinstance(vec,Vector)
-        if pos != 0:
-          self.__probabilityBuffer[pos] = vec.data
-          pos += 1
-          if vec.is_endpoint():
-            self.__avaliableFrames = pos
-            self.__terminationStep = True
-            break
+        if is_endpoint(vec):
+          self.__endpointStep = True
+          self.__tailIndex = pos
+          break
         else:
-          if vec.is_endpoint():
-            continue # discard this element
+          assert isinstance(vec,Vector)
           self.__probabilityBuffer[pos] = vec.data
           pos += 1
-    
-    if pos == 0:
-      self.stop()
-      return False
-    else:
-      return True
+    # pad the rest
+    self.__probabilityBuffer[pos:,:] = 0
+    return True
 
   def __decode(self,probabilityPIPE):
-    print("Start decoding!")
+    print(f"{self.name}: Start...")
     try:
       while True:
-        # Prepare chunk data
-        self.__probabilityBuffer.flags.writeable = True
+        # Prepare a chunk of frames
         if not self.__prepare_chunk_probability(probabilityPIPE):
           break
         self.__probabilityBuffer *= self.__acoustic_scale
-        self.__probabilityBuffer.flags.writeable = False
-        # Send to decoding process
-        if self.__terminationStep:
-          header = f"-2 {self.__avaliableFrames} ".encode() # Partial termination
-          inputs = header + encode_vector( self.__probabilityBuffer[:self.__avaliableFrames,:].reshape(-1) )
-          self.__reset_position_flag()
-        else:
-          header = f"-1 {self.__batchSize} ".encode() # 
-          inputs = header + encode_vector( self.__probabilityBuffer.reshape(-1) )
-
         try:
-          self.__decodeProcess.stdin.write(inputs)
-          self.__decodeProcess.stdin.flush()
+          # Send to decoding process
+          if self.__tailIndex > 0:
+            ## "-1" is activity flag 
+            header = f"-1 {self.__tailIndex} ".encode()
+            inputs = header + encode_vector( self.__probabilityBuffer[:self.__tailIndex,:].reshape(-1) )
+            self.__decodeProcess.stdin.write(inputs)
+            self.__decodeProcess.stdin.flush()
+  
+          # If this is an endpoint step
+          if self.__endpointStep:
+            self.__decodeProcess.stdin.write(b"-2 ")
+            self.__decodeProcess.stdin.flush()
+            self.__reset_position_flag()
+
+          # If this is final step
+          elif self.__finalStep:
+            self.__decodeProcess.stdin.write(b"-3 ")
+            self.__decodeProcess.stdin.flush()
+            #!!!! do not stop this Component
+            break
+
         except Exception as e:
           print(self.__decodeProcess.stderr.read().decode())
           raise e
-        # If no more data
-        if probabilityPIPE.is_exhaustion():
-          self.__decodeProcess.stdin.write(b"-3 ")
-          self.__decodeProcess.stdin.flush()
+
+        if self.is_terminated():
           break
+
       # Wait until all results has been gotten. 
-      while self.__readResultThread.is_alive():
-        time.sleep(info.TIMESCALE)
+      self.__readResultThread.join()
       # Close the decoding process
       self.__decodeProcess.stdin.write(b"over")
       self.stop()
@@ -449,16 +520,16 @@ class WfstDecoder(Component):
       self.kill()
       raise e
     finally:
-      print("Stop decoding!")
+      print(f"{self.name}: Stop!")
     
   def _start(self,inPIPE):
     # Open a decoding process
     self.__decodeProcess = subprocess.Popen(self.__cmd,shell=True,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-    decodeThread = threading.Thread(target=self.__decode,args=(inPIPE,))
+    decodeThread = KillableThread(target=self.__decode,args=(inPIPE,))
     decodeThread.setDaemon(True)
     decodeThread.start()
     # Open a thread to read result from decoding process
-    self.__readResultThread = threading.Thread(target=self.__read_result_from_subprocess)
+    self.__readResultThread = KillableThread(target=self.__read_result_from_subprocess)
     self.__readResultThread.setDaemon(True)
     self.__readResultThread.start()
 
@@ -467,6 +538,7 @@ class WfstDecoder(Component):
   # rewrite the stop function
   def stop(self):
     super().stop()
+    self.__decodeProcess.stdout.close()
     self.__decodeProcess.kill()
 
   # rewrite the kill function
@@ -474,4 +546,42 @@ class WfstDecoder(Component):
     super().kill()
     self.__decodeProcess.stdout.close()
     self.__decodeProcess.kill()
+
+def dump_text_PIPE(textPIPE,allowPartial=True,endSymbol="\n"):
+  '''
+  Dump a text PIPE to a transcription.
+  '''
+  assert isinstance(allowPartial,bool)
+  assert isinstance(endSymbol,str)
+  assert textPIPE.is_alive() or textPIPE.is_terminated(), "<textPIPE> must be ALIVE or TERMINATION PIPE."
   
+  result = []
+  memory = None
+  timecost = 0
+
+  while True:
+    if textPIPE.is_wrong() or textPIPE.is_exhausted():
+      break
+    elif textPIPE.is_empty():
+      time.sleep(info.TIMESCALE)
+      timecost += info.TIMESCALE
+      if timecost > info.TIMEOUT:
+        break
+
+    else:
+      packet = textPIPE.get()
+      if is_endpoint(packet):
+        if memory is None:
+          continue
+        else:
+          result.append( memory )
+          memory = None
+      else:
+        assert isinstance(packet,Text), "This is not a Text PIPE."
+        memory = packet.data
+        #print(memory)
+
+  if allowPartial and (memory is not None):
+    result.append( memory )
+
+  return endSymbol.join(result)
