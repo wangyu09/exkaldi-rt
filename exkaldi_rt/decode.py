@@ -21,11 +21,11 @@ import time
 import subprocess
 import os
 
-from exkaldi2.base import info, KillableThread 
-from exkaldi2.base import Component, PIPE, Vector, Text
-from exkaldi2.base import encode_vector
-from exkaldi2.feature import apply_floor
-from exkaldi2.base import ENDPOINT, is_endpoint
+from exkaldi_rt.base import info, KillableThread 
+from exkaldi_rt.base import Component, PIPE, Vector, Text
+from exkaldi_rt.base import encode_vector
+from exkaldi_rt.feature import apply_floor
+from exkaldi_rt.base import ENDPOINT, is_endpoint
 
 def softmax(data,axis=1):
 	'''

@@ -26,11 +26,11 @@ import time
 import datetime
 from collections import namedtuple
 
-from exkaldi2.version import version
+from exkaldi_rt.version import version
 
 class Info:
   '''
-  A object to define some parameters of ExKaldi2.
+  A object to define some parameters of ExKaldi-RT.
   '''
   def __init__(self):
     self.__kaldi_existed = False
@@ -89,7 +89,7 @@ class Info:
       out, err = p.communicate()
       if out == b'':
         print( "Warning: Kaldi root directory was not found automatically. " + \
-               "Module: exkaldi2.feature and exkaldi2.decode are unavaliable."
+               "Module: exkaldi_rt.feature and exkaldi_rt.decode are unavaliable."
               )
         #raise Exception("Kaldi root directory was not found automatically. Please ensure it has been added in environment sucessfully.")
       else:
@@ -99,8 +99,8 @@ class Info:
 
     if self.__kaldi_existed:
       assert os.path.isfile(os.path.join(KALDI_ROOT,"src","exkaldionlinebin","exkaldi-online-decoder")), \
-            "ExKaldi2 C++ source files have not been compiled sucessfully. " + \
-            "Please consult the Installation in github: https://github.com/wangyu09/exkaldi2 ."
+            "ExKaldi-RT C++ source files have not been compiled sucessfully. " + \
+            "Please consult the Installation in github: https://github.com/wangyu09/exkaldi-rt ."
 
       return os.path.join(KALDI_ROOT,"src","exkaldionlinebin")
     else:
@@ -149,7 +149,7 @@ class KillableThread(threading.Thread):
         ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, None) 
         raise SystemError("PyThreadState_SetAsyncExc failed.")
 
-class ExKaldi2Base:
+class ExKaldiRTBase:
   '''
   Base class to describe state of Components and PIPEs.
   '''
@@ -163,7 +163,7 @@ class ExKaldi2Base:
 
   def __init__(self,name=None):
     # State flag
-    self.__state = ExKaldi2Base.SILENT
+    self.__state = ExKaldiRTBase.SILENT
     # Name it
     self.rename(name=name)
 
@@ -179,32 +179,32 @@ class ExKaldi2Base:
       name = self.__class__.__name__
     else:
       assert isinstance(name,str) and len(name) > 0, f"<name> must be a string but got: {name}."
-    self.__name = name + f"[{ExKaldi2Base.OBJ_COUNTER}]"
-    ExKaldi2Base.OBJ_COUNTER += 1
+    self.__name = name + f"[{ExKaldiRTBase.OBJ_COUNTER}]"
+    ExKaldiRTBase.OBJ_COUNTER += 1
 
   def is_silent(self) -> bool:
-    return self.__state == ExKaldi2Base.SILENT
+    return self.__state == ExKaldiRTBase.SILENT
 
   def is_alive(self) -> bool:
-    return self.__state == ExKaldi2Base.ALIVE
+    return self.__state == ExKaldiRTBase.ALIVE
   
   def is_wrong(self) -> bool:
-    return self.__state == ExKaldi2Base.WRONG
+    return self.__state == ExKaldiRTBase.WRONG
   
   def is_terminated(self) -> bool:
-    return self.__state == ExKaldi2Base.TERMINATED
+    return self.__state == ExKaldiRTBase.TERMINATED
   
   def shift_state_to_silent(self):
-    self.__state = ExKaldi2Base.SILENT
+    self.__state = ExKaldiRTBase.SILENT
 
   def shift_state_to_alive(self):
-    self.__state = ExKaldi2Base.ALIVE
+    self.__state = ExKaldiRTBase.ALIVE
 
   def shift_state_to_wrong(self):
-    self.__state = ExKaldi2Base.WRONG
+    self.__state = ExKaldiRTBase.WRONG
 
   def shift_state_to_terminated(self):
-    self.__state = ExKaldi2Base.TERMINATED
+    self.__state = ExKaldiRTBase.TERMINATED
 
 ########################################
 
@@ -283,7 +283,7 @@ def is_endpoint(obj):
 
 ########################################
 
-class PIPE(ExKaldi2Base):
+class PIPE(ExKaldiRTBase):
   '''
   PIPE is used to connect Components and pass Packets.
   It is a Last-In-Last-Out queue.
@@ -455,7 +455,7 @@ class PIPE(ExKaldi2Base):
                   self.name,self.__firstPut,self.__lastPut,self.__firstGet,self.__lastGet
                 )
 
-class Component(ExKaldi2Base):
+class Component(ExKaldiRTBase):
   '''
   Components are used to process Packets.
   '''
@@ -546,7 +546,7 @@ class Component(ExKaldi2Base):
     '''Unblock the output PIPE.'''
     self.outPIPE.unblock()
 
-class Chain(ExKaldi2Base):
+class Chain(ExKaldiRTBase):
   '''
   Chain is a container to easily manage the sequential Component-PIPEs.
   '''

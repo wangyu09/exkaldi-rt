@@ -14,7 +14,7 @@ function install_package(){
     rm -r build dist *.egg-info
 }
 
-echo y | pip3 uninstall exkaldi2;
+echo y | pip3 uninstall exkaldi_rt;
 #pip install kenlm;
 #python3 -c "import kenlm" 2>/dev/null || {
 #    cd src && cd kenlm || exit 1;

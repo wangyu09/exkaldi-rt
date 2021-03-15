@@ -26,10 +26,10 @@ import numpy as np
 import subprocess
 from collections import namedtuple
 
-from exkaldi2.base import ExKaldi2Base, Component, PIPE, Packet, Element, Vector
-from exkaldi2.base import run_exkaldi_shell_command
-from exkaldi2.base import info, KillableThread
-from exkaldi2.base import ENDPOINT, is_endpoint
+from exkaldi_rt.base import ExKaldi2Base, Component, PIPE, Packet, Element, Vector
+from exkaldi_rt.base import run_exkaldi_shell_command
+from exkaldi_rt.base import info, KillableThread
+from exkaldi_rt.base import ENDPOINT, is_endpoint
 
 def record(seconds=0,fileName=None):
   '''

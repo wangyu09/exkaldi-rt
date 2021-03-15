@@ -22,8 +22,8 @@ from collections import namedtuple
 import numpy as np
 from io import BytesIO
 
-from exkaldi2.base import ExKaldi2Base,Component,PIPE,Vector,Element,Text
-from exkaldi2.base import info
+from exkaldi_rt.base import ExKaldi2Base,Component,PIPE,Vector,Element,Text
+from exkaldi_rt.base import info
 
 socket.setdefaulttimeout(info.TIMEOUT)
 

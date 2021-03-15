@@ -21,10 +21,10 @@ import time
 import os
 import glob
 
-from exkaldi2.base import ExKaldi2Base, Component, PIPE, Vector
-from exkaldi2.base import run_exkaldi_shell_command, encode_vector
-from exkaldi2.base import info, KillableThread
-from exkaldi2.base import ENDPOINT, is_endpoint
+from exkaldi_rt.base import ExKaldiRTBase, Component, PIPE, Vector
+from exkaldi_rt.base import run_exkaldi_shell_command, encode_vector
+from exkaldi_rt.base import info, KillableThread
+from exkaldi_rt.base import ENDPOINT, is_endpoint
 
 ###############################################
 # 1. Some functions for feature extraction
@@ -246,6 +246,16 @@ def load_lda_matrix(ldaFile):
     else:
       vec = np.frombuffer(buf, dtype='float64')
     return np.reshape(vec,(rows,cols)).T
+
+def parallel_run(func):
+	def inner(frames,args):
+    assert len(frames.shape) == 2
+
+
+			return func(*args,**kwargs)
+
+	return inner
+
 
 class ParallelFeatureExtractor(Component):
   '''
@@ -855,7 +865,7 @@ def get_kaldi_cmvn(fileName,spk=None):
     return result
 
 '''A base class for CMV normalizer'''
-class CMVNormalizer(ExKaldi2Base):
+class CMVNormalizer(ExKaldiRTBase):
   '''
   CMVN used to be embeded in FeatureProcesser.
   Note that this is not Component.

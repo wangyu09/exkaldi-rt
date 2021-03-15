@@ -19,9 +19,9 @@ from collections import namedtuple
 
 _MAJOR_VERSION = '1'
 _MINOR_VERSION = '1'
-_PATCH_VERSION = '3'
+_PATCH_VERSION = '4'
 
-version = namedtuple("ExKaldi2",["plain","major","minor","patch"])(
+version = namedtuple("ExKaldiRT",["plain","major","minor","patch"])(
                    '.'.join([_MAJOR_VERSION, _MINOR_VERSION, _PATCH_VERSION]),
                    _MAJOR_VERSION, _MINOR_VERSION, _PATCH_VERSION
                   )
