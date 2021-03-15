@@ -1,4 +1,4 @@
-name: exkaldi2
+name: exkaldi-rt
 
 on:
   push:
