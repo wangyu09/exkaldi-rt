@@ -21,9 +21,12 @@ import subprocess
 import numpy as np
 import sys
 import threading
+import multiprocessing
+from multiprocessing import RawValue
 import ctypes
 import time
 import datetime
+import random
 from collections import namedtuple
 
 from exkaldirt.version import version
@@ -39,7 +42,7 @@ class Info:
     self.__max_socket_buffer_size = 10000
     # Check Kaldi root directory and ExKaldi-RT tool directory
     self.__kaldi_root = self.__find_kaldi_root()
-    self.__cmdroot = os.path.join(self.__kaldi_root,"src","exkaldirtcbin")
+    self.__cmdroot = None if self.__kaldi_root is None else os.path.join(self.__kaldi_root,"src","exkaldirtcbin")
     # Get the float floor
     self.__epsilon = self.__get_floot_floor()
 
