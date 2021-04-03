@@ -12,7 +12,7 @@ TESTFILES =
 
 ADDLIBS = ../util/kaldi-util.a ../matrix/kaldi-matrix.a ../decoder/kaldi-decoder.a \
           ../base/kaldi-base.a ../feat/kaldi-feat.a ../hmm/kaldi-hmm.a \
-          ../lat/kaldi-lat.a ../exkaldionline/exkaldi-online.a ../fstext/kaldi-fstext.a \
+          ../lat/kaldi-lat.a ../exkaldirtc/exkaldi-online.a ../fstext/kaldi-fstext.a \
           ../transform/kaldi-transform.a ../gmm/kaldi-gmm.a ../tree/kaldi-tree.a \
           ../online2/kaldi-online2.a
 
