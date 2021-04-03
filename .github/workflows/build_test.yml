@@ -38,15 +38,15 @@ jobs:
        ./configure --shared --use-cuda=no
        make depend -j 4
        make -j 4
-    - name: Build exkaldionline
+    - name: Build exkaldirtc
       run: |
-       cp -r exkaldionline kaldi-master/src/
-       cd kaldi-master/src/exkaldionline
+       cp -r exkaldirtc kaldi-master/src/
+       cd kaldi-master/src/exkaldirtc
        make depend
        make
-    - name: Build exkaldionlinebin
+    - name: Build exkaldirtcbin
       run: |
-       cp -r exkaldionlinebin kaldi-master/src/
-       cd kaldi-master/src/exkaldionlinebin
+       cp -r exkaldirtcbin kaldi-master/src/
+       cd kaldi-master/src/exkaldirtcbin
        make depend
        make

@@ -1,62 +1,69 @@
-# ExKaldi-RT: An Online Speech Recognition Extension Toolkit based on Kaldi 
+# ExKaldi-RT: An Online Speech Recognition Extension Toolkit of Kaldi 
 ![exkaldi-rt](https://github.com/wangyu09/exkaldi-rt/workflows/exkaldi-rt/badge.svg)
 
 ExKaldi-RT is an online ASR toolkit for Python language.
-It based on Kaldi lattice faster decoder.
+It based on Kaldi's _LatticeFasterDecoder_.
 
 ExKaldi-RT has these features:
 
-1. We provided a basic voice activity detection (VAD) function based on Google Webrtc VAD, 
-but you can apply your own VAD function, including a DNN model trained with the deep learning frameworks.
+1. Easy to build an online ASR pipeline with Python.
 
-2. It supported extracting Spectrogram, fBank, MFCC, LDA+MLLT (and their mixture) acoustic feature in current version. 
-Besides, you can design your original feature function.
+2. Use DNN acoustic model trained with DL framesworks, such as TensorFlow and PyTorch.
 
-3. ExKaldi-RT uses DNN acoustic model trained with DL framesworks.
-In current version, we only support online decoder based on WFST decoding graph. 
+3. Easy to custimize original functions for, such as voice activity detection (VAD) and denoising. 
 
-4. It's easy to use RNN langauge model trained with DL frameworks to rescore N-Best results.
+4. Support network transmission.
 
-5. Support network transmission and customizing compression algorithm.
+We tested our toolkit using Kaldi version 5.5, commit acff3f65640715f22252f143df7c3e1997899163 .
 
-We test our toolkit using Kaldi version 5.5, commit acff3f65640715f22252f143df7c3e1997899163 .
+# Update
+In branch V1.2, we are improving ExKaldi-RT from the following aspects:
+
+1. Instead of _subprocess_ in Python, use Pybind to build the interface with C++ library.
+
+2. Instead of mutiple threads, use mutiple processes to drive each components.
+
+3. Improve the Packet to carry more infomation not only the data.
+
+4. It is able to connect components parallelly to perform multiple tasks.
 
 ## Installation
 
 If you plan to use ExKaldi-RT on the server, 
-please make sure that before installing ExKaldi-RT, Kaldi has been installed and compiled successfully.
+please make sure that Kaldi has been installed and compiled successfully before installing ExKaldi-RT.
+Then follow the steps below to install ExKaldi-RT package.
 
 1. Clone ExKaldi-RT repository.
 ```shell
 git clone https://github.com/wangyu09/exkaldi-rt.git
 ``` 
 
-2. Copy (or move) these directories into Kaldi source folder.
+2. Copy these directories into Kaldi source folder.
 ```shell
-mv exkaldi-rt/exkaldionline $KALDI_ROOT/src/
-mv exkaldi-rt/exkaldionlinebin $KALDI_ROOT/src/
+cp -r exkaldi-rt/exkaldirtc $KALDI_ROOT/src/
+cp -r exkaldi-rt/exkaldirtcbin $KALDI_ROOT/src/
 ```
 
 3. Go to source directories and compile C++ source programs.
 ```shell
 export EXKALDIRTROOT=`pwd`
 
-cd $KALDI_ROOT/src/exkaldionline
+cd $KALDI_ROOT/src/exkaldirtc
 make depend
 make
-cd $KALDI_ROOT/src/exkaldionlinebin
+cd $KALDI_ROOT/src/exkaldirtcbin
 make depend
 make
 ```
 
-4. Go back to exkaldi-rt derectory and install ExKaldi-RT python package.
+4. Go back to exkaldi-rt derectory and install ExKaldi-RT Python package.
 ```shell
 cd $EXKALDIRTROOT
-sudo apt-get install libportaudio2
+sudo apt-get install libjack-jackd2-dev portaudio19-dev libportaudio2
 bash quick_install.sh
 ```
 
 5. Check.
 ```shell
-python -c "import exkaldi_rt"
+python -c "import exkaldirt"
 ```
