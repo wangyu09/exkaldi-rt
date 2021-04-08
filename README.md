@@ -17,6 +17,7 @@ ExKaldi-RT has these features:
 We tested our toolkit using Kaldi version 5.5, commit acff3f65640715f22252f143df7c3e1997899163 .
 
 # Update
+
 In branch V1.2, we are improving ExKaldi-RT from the following aspects:
 
 1. Instead of _subprocess_ in Python, use Pybind to build the interface with C++ library.
@@ -25,7 +26,7 @@ In branch V1.2, we are improving ExKaldi-RT from the following aspects:
 
 3. Improve the Packet to carry more infomation not only the data.
 
-4. It is able to connect components parallelly to perform multiple tasks.
+4. It is able to connect components parallelly to perform multiple tasks (under designing).
 
 ## Installation
 
@@ -54,6 +55,7 @@ make
 cd $KALDI_ROOT/src/exkaldirtcbin
 make depend
 make
+make pybind
 ```
 
 4. Go back to exkaldi-rt derectory and install ExKaldi-RT Python package.

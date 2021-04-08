@@ -1,7 +1,7 @@
 # coding=utf-8
 #
 # Yu Wang (University of Yamanashi)
-# May, 2020
+# Apr, 2020
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,8 +18,8 @@
 from collections import namedtuple
 
 _MAJOR_VERSION = '1'
-_MINOR_VERSION = '1'
-_PATCH_VERSION = '4'
+_MINOR_VERSION = '2'
+_PATCH_VERSION = '0'
 
 version = namedtuple("ExKaldiRT",["plain","major","minor","patch"])(
                    '.'.join([_MAJOR_VERSION, _MINOR_VERSION, _PATCH_VERSION]),

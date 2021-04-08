@@ -1,7 +1,7 @@
 #include<iostream>
 #include<string>
 #include<cstring>
-#include"exkaldionline/exkaldi-online-decoding.h"
+#include"exkaldirtc/exkaldi-online-decoding.h"
 #include"fstext/fstext-lib.h"
 
 int main(int argc, char *argv[])

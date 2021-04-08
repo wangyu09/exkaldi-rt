@@ -1,12 +1,19 @@
-from exkaldirt import stream
+#from exkaldirt import stream
+import stream
+import base
 import os
 
-wavPath = "../examples/84-121550-0000.wav"
+wavPath = "../test/84-121550-0000.wav"
 
 assert os.path.isfile(wavPath), f"No such file: {wavPath}"
-#print(stream.read(wavPath))
+#wav = stream.read(wavPath)
+#print(wav.value)
 
-#print(stream.record(seconds=2))
+#frames1 = stream.cut_frames(wav.value[:-10])
+#print(frames1.shape)
+
+#frames2 = stream.cut_frames(wav.value[:-10],snip=False)
+#print(frames2.shape)
 
 ####################
 # Test Stream Reader
@@ -14,7 +21,7 @@ assert os.path.isfile(wavPath), f"No such file: {wavPath}"
 
 def stream_reader_test():
 
-  vad = None #stream.WebrtcVADetector()
+  vad = stream.WebrtcVADetector()
 
   reader = stream.StreamReader(
           waveFile = wavPath,
@@ -26,7 +33,16 @@ def stream_reader_test():
   reader.start()
   reader.wait()
 
-  print(reader.outPIPE.size())
+  print( reader.outPIPE.size() )
+  print( reader.outPIPE.state_is_(base.mark.terminated) )
+  print( reader.outPIPE.is_inlocked() )
+  print( reader.outPIPE.is_outlocked() )
+  print( reader.get_audio_info() )
+
+  pac = reader.outPIPE.get()
+  print( pac.mainKey )
+  print( pac.keys() )
+  print( pac[pac.mainKey] )
 
 #stream_reader_test()
 
@@ -42,6 +58,7 @@ def cutter_test():
           simulate = False,
           vaDetector = None,
         )
+
   cutter = stream.ElementFrameCutter(
           width = 400,
           shift = 160,
@@ -49,9 +66,13 @@ def cutter_test():
   
   reader.start()
   cutter.start(inPIPE=reader.outPIPE)
-
+  #base.dynamic_display( cutter.outPIPE )
   cutter.wait()
   print( cutter.outPIPE.size() )
 
-#cutter_test()
+  pac = cutter.outPIPE.get()
+  print( pac.keys() )
+  print( pac[pac.mainKey] )
+
+cutter_test()
 
