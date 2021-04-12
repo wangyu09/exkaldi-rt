@@ -1,22 +1,7 @@
 # ExKaldi-RT: An Online Speech Recognition Extension Toolkit of Kaldi 
 ![exkaldi-rt](https://github.com/wangyu09/exkaldi-rt/workflows/exkaldi-rt/badge.svg)
 
-ExKaldi-RT is an online ASR toolkit for Python language.
-It based on Kaldi's _LatticeFasterDecoder_.
-
-ExKaldi-RT has these features:
-
-1. Easy to build an online ASR pipeline with Python.
-
-2. Use DNN acoustic model trained with DL framesworks, such as TensorFlow and PyTorch.
-
-3. Easy to custimize original functions for, such as voice activity detection (VAD) and denoising. 
-
-4. Support network transmission.
-
-We tested our toolkit using Kaldi version 5.5, commit acff3f65640715f22252f143df7c3e1997899163 .
-
-# Update
+# Version 1.2
 
 In branch V1.2, we are improving ExKaldi-RT from the following aspects:
 
@@ -43,6 +28,11 @@ git clone https://github.com/wangyu09/exkaldi-rt.git
 ```shell
 cp -r exkaldi-rt/exkaldirtc $KALDI_ROOT/src/
 cp -r exkaldi-rt/exkaldirtcbin $KALDI_ROOT/src/
+```
+
+3. Install Pybind11.
+```shell
+pip3 install pybind11
 ```
 
 3. Go to source directories and compile C++ source programs.

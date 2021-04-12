@@ -91,7 +91,7 @@ pybind11::array_t<double> splice_feat(pybind11::array_t<double> frames, size_t l
   return result;
 }
 
-pybind11::array_t<double> add_delta(pybind11::array_t<double> frames, size_t order, size_t window)
+pybind11::array_t<double> add_deltas(pybind11::array_t<double> frames, size_t order, size_t window)
 {
   size_t num_frame = frames.shape(0);
   size_t feat_dim = frames.shape(1);
@@ -129,5 +129,5 @@ PYBIND11_MODULE(cutils,m){
   m.def("dither",&dither,"Dither.");
   m.def("srfft",&srfft,"Do split radix real FFT.");
   m.def("splice_feat",&splice_feat,"Splice feature.");
-  m.def("add_delta",&add_delta,"Splice feature.");
+  m.def("add_deltas",&add_delta,"Add delta features.");
 }

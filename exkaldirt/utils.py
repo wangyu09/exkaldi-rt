@@ -64,9 +64,8 @@ def vector_from_bytes(bvec):
   dtype = dtype_from_bytes( bvec[0:2] )
   return np.frombuffer(bvec[2:],dtype=dtype)
 
-"""
 def matrix_to_bytes(mat):
-  assert len(mat.shape) == 2
+  assert isinstance(mat,np.ndarray) and len(mat.shape) == 2
   bdtype = dtype_to_bytes( mat.dtype )
   frames = mat.shape[0]
   return bdtype + uint_to_bytes(frames,length=4) + mat.tobytes()
@@ -76,7 +75,6 @@ def matrix_from_bytes(mat):
   frames = uint_from_bytes( mat[2:6] )
   data = np.frombuffer( mat[6:], dtype=dtype )
   return data.reshape( [frames,-1] )
-"""
 
 def cBool(value):
   return RawValue(ctypes.c_bool,value)
@@ -94,6 +92,7 @@ def encode_vector_temp(vec)->bytes:
   '''
   Define how to encode the vector data in order to send to subprocess.
   '''
+  assert len(vec.shape) == 1 and 0 not in vec.shape
   return (" " + " ".join( map(str,vec)) + " ").encode()
 
 def run_exkaldi_shell_command(cmd,inputs=None)->list:
@@ -104,7 +103,7 @@ def run_exkaldi_shell_command(cmd,inputs=None)->list:
     _cmd_: a string of a shell command and its arguments.
     _inputs_: None or bytes object.
   '''
-  assert isinstance(cmd,str) and cmd.strip() > 0 
+  assert isinstance(cmd,str) and len(cmd.strip()) > 0 
   
   if inputs is not None:
     assert isinstance(inputs,bytes),""
