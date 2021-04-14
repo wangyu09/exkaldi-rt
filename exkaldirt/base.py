@@ -247,6 +247,8 @@ class Packet:
         assert len(data.shape) in [1,2] 
         assert 0 not in data.shape, "Invalid data."
         data = data.copy()
+    elif isinstance(data,str):
+      assert data != ""
     else:
         raise Exception("Unsupported data type")
     self.__data[key] = data
@@ -1696,12 +1698,6 @@ class Joint(ExKaldiRTBase):
   def put_packet(self,outID,packet):
     self.__outPIPE_Pool[outID].put(packet,password=self.__outPassword_Pool[outID])
 
-  def create_process(self,target,args=()):
-    self.__core_process_over.value = False
-    p = multiprocessing.Process(target=target,args=args,kwargs=(("overFlag",self.__core_process_over),))
-    p.daemon = True
-    return p
-
 def dynamic_display(pipe,mapFunc=None):
   '''
   This is a tool for debug or testing.
@@ -1813,6 +1809,7 @@ class ContextManager(ExKaldiRTBase):
         self.__buffer[-self.__center:,:] = batch
         return None
     else:
+      assert len(batch) == self.__center
       if self.__right == 0:
         self.__buffer[0:self.__left,:] = self.__buffer[ self.__center: ]
         self.__buffer[self.__left:,:] = batch

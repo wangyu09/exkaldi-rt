@@ -85,17 +85,6 @@ int main(int argc, char *argv[])
   TransitionModel trans_model;
   ReadKaldiObject(model_in_file, &trans_model);
 
-  /*
-  fst::SymbolTable *word_syms = NULL;
-  if (word_syms_filename != "None"){
-    if (!(word_syms = fst::SymbolTable::ReadText(word_syms_filename)))
-    {
-      KALDI_ERR << "Could not read symbol table from file "
-                << word_syms_filename;
-    }
-  }
-  */
-
   fst::Fst<fst::StdArc> *decode_fst = fst::ReadFstKaldiGeneric(fst_in_str);
 
   WordBoundaryInfo *word_boundary_info = NULL;
@@ -119,15 +108,15 @@ int main(int argc, char *argv[])
       // get chunk frames
       bool flag = decoder.RecieveFrames(TIMEOUT,TIMESCALE);
 
-      //std::err << "arrive return:" << flag << std::endl;
-
       if (flag)
       {
         decoder.AdvanceDecoding();
         if (decoder.IsLastDecoding()) {break;}
 
         bool segover = decoder.EndpointDetected(ec_config,frame_shift_in_seconds);
-        if (segover) {break;}
+        if (segover) { 
+          break;
+        }
 
         Lattice lat;
         decoder.GetBestPath(false, &lat);
@@ -140,12 +129,14 @@ int main(int argc, char *argv[])
   
     }
 
-    //std::cerr << "arrive break" << std::endl;
-
     if (decoder.IsTermination()) {
       std::cout << "-3 " << std::endl;
-      std::cout.flush();  
+      std::cout.flush();
       break;
+    }
+
+    if ( decoder.NumFramesDecoded() == 0 ){
+      continue;
     }
 
     decoder.FinalizeDecoding();
@@ -156,7 +147,8 @@ int main(int argc, char *argv[])
                       trans_model, n_bests);
     
     std::cout << std::endl;
-    std::cout.flush();  
+    std::cout.flush(); 
+
   }
 
   if (word_boundary_file != "None"){

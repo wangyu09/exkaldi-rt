@@ -1397,8 +1397,6 @@ class MatrixFeatureProcessor(Component):
                     cmvNormalizer=None,lda=None,oKey="data",name=None):
     '''
     Args:
-      _featDim_: (int) The dim. of feature.
-      _batchSize_: (int) The batch size.
       _delta_: (int) The order of delta.
       _deltaWindow_: (int) The window size of delta.
       _spliceLeft_: (int) Left context to splice.

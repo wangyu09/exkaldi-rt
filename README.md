@@ -1,7 +1,7 @@
 # ExKaldi-RT: An Online Speech Recognition Extension Toolkit of Kaldi 
 ![exkaldi-rt](https://github.com/wangyu09/exkaldi-rt/workflows/exkaldi-rt/badge.svg)
 
-# Version 1.2
+# Version 1.2 ( in development )
 
 In branch V1.2, we are improving ExKaldi-RT from the following aspects:
 
@@ -13,7 +13,7 @@ In branch V1.2, we are improving ExKaldi-RT from the following aspects:
 
 4. It is able to connect components parallelly to perform multiple tasks (under designing).
 
-## Installation
+## Installation ( unavaliable )
 
 If you plan to use ExKaldi-RT on the server, 
 please make sure that Kaldi has been installed and compiled successfully before installing ExKaldi-RT.
@@ -35,7 +35,7 @@ cp -r exkaldi-rt/exkaldirtcbin $KALDI_ROOT/src/
 pip3 install pybind11
 ```
 
-3. Go to source directories and compile C++ source programs.
+4. Go to source directories and compile C++ source programs.
 ```shell
 export EXKALDIRTROOT=`pwd`
 
@@ -48,14 +48,14 @@ make
 make pybind
 ```
 
-4. Go back to exkaldi-rt derectory and install ExKaldi-RT Python package.
+5. Go back to exkaldi-rt derectory and install ExKaldi-RT Python package.
 ```shell
 cd $EXKALDIRTROOT
 sudo apt-get install libjack-jackd2-dev portaudio19-dev libportaudio2
 bash quick_install.sh
 ```
 
-5. Check.
+6. Check.
 ```shell
 python -c "import exkaldirt"
 ```
