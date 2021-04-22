@@ -1,57 +1,33 @@
-from exkaldirt import base, stream, transmit
-import os
+import base
+import transmit
+import numpy as np
 
-#################################
-# Test sending value packets
-#################################
+#############################
+# exkaldirt.transmit.PacketSender
+# is used to send packet to remote host computer.
+#############################
 
-def send_value_packets():
+def test_sender():
 
-  wavPath = "../examples/84-121550-0000.wav"
+  pipe = base.PIPE()
 
-  assert os.path.isfile(wavPath), f"No such file: {wavPath}"
+  for i in range(5):
+    pipe.put( base.Packet( {"element":1}, cid=i, idmaker=0 ) )
 
-  reader = stream.StreamReader(
-          waveFile = wavPath,
-          chunkSize = 480,
-          simulate = False,
-          vaDetector = None,
-        )
+  for i in range(5,10):
+    pipe.put( base.Packet( {"vector":np.ones([5,],dtype="float32")}, cid=i, idmaker=0 ) )
 
-  sender = transmit.PacketSender(
-          thost = "192.168.1.11",
-          tport = 9509,
-          batchSize = 1024,
-        )
+  for i in range(10,15):
+    pipe.put( base.Packet( {"matrix":np.ones([5,10],dtype="float32")}, cid=i, idmaker=0 ) )
 
-  sender.encode_function = transmit.encode_value_packet
+  for i in range(15,20):
+    pipe.put( base.Packet( {"string":"this is a test"}, cid=i, idmaker=0 ) )
 
-  reader.start()
-  sender.start( inPIPE=reader.outPIPE )
+  pipe.stop()
+
+  # define a packet sender
+  sender = transmit.PacketSender(thost="192.168.1.11",tport=9509)
+  sender.start(inPIPE=pipe)
   sender.wait()
 
-#send_value_packets()
-
-#################################
-# Test sending text packets
-#################################
-
-def send_text_packets():
-
-  testPIPE = base.PIPE()
-  for i in range(1,21):
-    testPIPE.put( base.Text( "AA "*i ) )
-  testPIPE.stop()
-
-  sender = transmit.PacketSender(
-          thost = "192.168.1.11",
-          tport = 9509,
-          batchSize = 1024,
-        )
-
-  sender.encode_function = transmit.encode_text_packet
-
-  sender.start( inPIPE=testPIPE )
-  sender.wait()
-
-send_text_packets()
+test_sender()

@@ -2,11 +2,11 @@
 ![exkaldi-rt](https://github.com/wangyu09/exkaldi-rt/workflows/exkaldi-rt/badge.svg)
 
 ExKaldi-RT is an online ASR toolkit for Python language.
-It based on Kaldi's _LatticeFasterDecoder_.
+It reads realtime streaming audio and do online feature extraction, probability computation, and online decoding. It based on Kaldi's _LatticeFasterDecoder_.
 
 ExKaldi-RT has these features:
 
-1. Easy to build an online ASR pipeline with Python.
+1. Easy to build an online ASR pipeline with Python with low latency.
 
 2. Use DNN acoustic model trained with DL framesworks, such as TensorFlow and PyTorch.
 
@@ -16,14 +16,14 @@ ExKaldi-RT has these features:
 
 We tested our toolkit using Kaldi version 5.5, commit acff3f65640715f22252f143df7c3e1997899163 .
 
-# Update
-In branch V1.2, we are improving ExKaldi-RT from the following aspects:
+# Version 1.2
 
 1. Instead of _subprocess_ in Python, use Pybind to build the interface with C++ library.
+(It is being gradually completed.)
 
-2. Instead of mutiple threads, use mutiple processes to drive each components.
+2. Still use multiple threads to drive each components ( We have tried to use multiprocessing, but we have encountered some difficulties in data communication between different processes, and are considering solutions. )
 
-3. Improve the Packet to carry more infomation not only the data.
+3. Improve the Packet to carry more infomation.
 
 4. It is able to connect components parallelly to perform multiple tasks.
 
@@ -40,11 +40,18 @@ git clone https://github.com/wangyu09/exkaldi-rt.git
 
 2. Copy these directories into Kaldi source folder.
 ```shell
-cp -r exkaldi-rt/exkaldirtc $KALDI_ROOT/src/
-cp -r exkaldi-rt/exkaldirtcbin $KALDI_ROOT/src/
+cd exkaldi-rt
+cp -r exkaldirtc $KALDI_ROOT/src/
+cp -r exkaldirtcbin $KALDI_ROOT/src/
 ```
 
-3. Go to source directories and compile C++ source programs.
+3. Install Pybind11.
+```shell
+pip3 install pybind11
+```
+
+4. Go to source directories and compile C++ source programs.
+If you have installed Pybind11, please ignore the compile error: "fatal error: pybind11/pybind11.h: No such file or directory"
 ```shell
 export EXKALDIRTROOT=`pwd`
 
@@ -52,18 +59,19 @@ cd $KALDI_ROOT/src/exkaldirtc
 make depend
 make
 cd $KALDI_ROOT/src/exkaldirtcbin
-make depend
+make -i depend 
 make
+make pybind
 ```
 
-4. Go back to exkaldi-rt derectory and install ExKaldi-RT Python package.
+5. Go back to exkaldi-rt derectory and install ExKaldi-RT Python package.
 ```shell
 cd $EXKALDIRTROOT
 sudo apt-get install libjack-jackd2-dev portaudio19-dev libportaudio2
 bash quick_install.sh
 ```
 
-5. Check.
+6. Check.
 ```shell
 python -c "import exkaldirt"
 ```

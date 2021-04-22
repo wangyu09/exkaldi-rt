@@ -1,7 +1,7 @@
 # coding=utf-8
 #
 # Yu Wang (University of Yamanashi)
-# Dec, 2020
+# Apr, 2021
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,16 +15,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
-import threading
-import time
 import os
-import glob
+import math
+import pyaudio
+import wave
+import time
+import webrtcvad
+import threading
+import multiprocessing
+import numpy as np
+import subprocess
+from collections import namedtuple
 
-from exkaldirt.base import ExKaldiRTBase, Component, PIPE, Vector
-from exkaldirt.base import run_exkaldi_shell_command, encode_vector
-from exkaldirt.base import info, KillableThread
-from exkaldirt.base import ENDPOINT, is_endpoint
+from exkaldirt.base import ExKaldiRTBase, Component, PIPE, Packet, ContextManager
+from exkaldirt.utils import run_exkaldi_shell_command, encode_vector_temp
+from exkaldirt.base import info, mark, print_
+from exkaldirt.base import Endpoint, is_endpoint, NullPIPE
+
+#from base import ExKaldiRTBase, Component, PIPE, Packet, ContextManager
+#from utils import run_exkaldi_shell_command, encode_vector_temp
+#from base import info, mark, print_
+#from base import Endpoint, is_endpoint, NullPIPE
+
+import sys
+sys.path.append( info.CMDROOT )
+import cutils
 
 ###############################################
 # 1. Some functions for feature extraction
@@ -111,10 +126,7 @@ def dither_singal_1d(waveform,factor=1.0):
     A new 1-d np.ndarray.
   '''
   assert isinstance(waveform,np.ndarray) and len(waveform.shape) == 1
-  wavData = f"1 {len(waveform)} ".encode() + encode_vector(waveform)
-  cmd = os.path.join(info.CMDROOT,f"exkaldi-dither --factor {factor}")
-  out = run_exkaldi_shell_command(cmd,inputs=wavData)
-  return np.array(out,dtype="float32")
+  return cutils.dither( waveform[None,:], factor)[0]
 
 def dither_singal_2d(waveform,factor=0.0):
   '''
@@ -128,12 +140,7 @@ def dither_singal_2d(waveform,factor=0.0):
     A new 2-d np.ndarray.
   '''
   assert isinstance(waveform,np.ndarray) and len(waveform.shape) == 2
-  rows = waveform.shape[0]
-  cols = waveform.shape[1]
-  wavData = f"{rows} {cols} ".encode() + encode_vector(waveform.reshape(-1))
-  cmd = os.path.join(info.CMDROOT,f"exkaldi-dither --factor {factor}")
-  out = run_exkaldi_shell_command(cmd,inputs=wavData)
-  return np.array(out,dtype="float32").reshape(rows,cols)
+  return cutils.dither(waveform, factor)
 
 def remove_dc_offset_1d(waveform):
   '''
@@ -206,10 +213,8 @@ def split_radix_real_fft_1d(waveform):
   assert isinstance(waveform,np.ndarray) and len(waveform.shape) == 1
   points = len(waveform)
   fftLen = get_padded_fft_length(points)
-  inputs = f"1 {points} ".encode() + encode_vector(waveform)
-  cmd = os.path.join(info.CMDROOT,f"exkaldi-srfft --fftsize {fftLen}")
-  out = run_exkaldi_shell_command(cmd,inputs=inputs)
-  return fftLen, np.array(out,dtype="float32").reshape([-1,2])
+  result = cutils.srfft(waveform[None,:],fftLen)[0]
+  return fftLen, result
 
 def split_radix_real_fft_2d(waveform):
   '''
@@ -224,13 +229,10 @@ def split_radix_real_fft_2d(waveform):
     _Result_: (A 3-d np.ndarray) The 2st dimension is real values, The 3st dimension is image values.
   '''
   assert isinstance(waveform,np.ndarray) and len(waveform.shape) == 2
-  frames = waveform.shape[0]
   points = waveform.shape[1]
   fftLen = get_padded_fft_length(points)
-  inputs = f"{frames} {points} ".encode() + encode_vector(waveform.reshape(-1))
-  cmd = os.path.join(info.CMDROOT,f"exkaldi-srfft --fftsize {fftLen}")
-  out = run_exkaldi_shell_command(cmd,inputs=inputs)
-  return fftLen, np.array(out,dtype="float32").reshape([frames,-1,2])
+  result = cutils.srfft(waveform,fftLen)
+  return fftLen, result
 
 def compute_power_spectrum_1d(fftFrame):
   '''
@@ -430,9 +432,12 @@ def add_deltas(feat, order=2, window=2):
   assert isinstance(feat,np.ndarray) and len(feat.shape) == 2
   assert isinstance(order,int) and order > 0
   assert isinstance(window,int) and window > 0
+
+  # return cutils.add_deltas(feat,order,window)
+
   frames = feat.shape[0]
   dims = feat.shape[1]
-  inputs = f"{frames} {dims} ".encode() + encode_vector( feat.reshape(-1) )
+  inputs = f"{frames} {dims} ".encode() + encode_vector_temp( feat.reshape(-1) )
   cmd = os.path.join(info.CMDROOT,f"exkaldi-add-deltas --order {order} --window {window}")
   out = run_exkaldi_shell_command(cmd,inputs=inputs)
   return np.array(out,dtype="float32").reshape([frames,-1])
@@ -453,12 +458,7 @@ def splice_feats(feat, left, right):
   assert isinstance(left,int) and left >= 0
   assert isinstance(right,int) and right >= 0
   if left == 0 and right ==0: return feat
-  frames = feat.shape[0]
-  dims = feat.shape[1]
-  inputs = f"{frames} {dims} ".encode() + encode_vector( feat.reshape(-1) )
-  cmd = os.path.join(info.CMDROOT,f"exkaldi-splice-feats --left {left} --right {right}")
-  out = run_exkaldi_shell_command(cmd, inputs=inputs)
-  return np.array(out,dtype="float32").reshape([frames,-1])
+  return cutils.splice_feat(feat, left, right)
 
 # This function is wrapped from kaldi_io library.
 def load_lda_matrix(ldaFile):
@@ -487,12 +487,12 @@ def load_lda_matrix(ldaFile):
       vec = np.frombuffer(buf, dtype='float64')
     return np.reshape(vec,(rows,cols)).T
 
-class ParallelFeatureExtractor(Component):
+class MatrixFeatureExtractor(Component):
   '''
   The base class of a feature extractor.
   Please implement the self.extract_function by your function.
   '''
-  def __init__(self,frameDim,batchSize=10,minParallelSize=10,name=None):
+  def __init__(self,extFunc,minParallelSize=10,oKey="data",name=None):
     '''
     Args:
       _frameDim_: (int) The dim. of frame.
@@ -500,201 +500,102 @@ class ParallelFeatureExtractor(Component):
       _minParallelSize_: (int) If _batchSize_ >= minParallelSize, run two parallel threads for one batch features.
       _name_: (str) Name.
     '''
-    super().__init__(name=name)
-    assert isinstance(frameDim,int) and frameDim > 0
-    assert isinstance(batchSize,int) and batchSize > 0
+    super().__init__(oKey=oKey,name=name)
     assert isinstance(minParallelSize,int) and minParallelSize >= 2
+    assert callable(extFunc)
+    self.__extract_function_ = extFunc
+    self.__minParallelBatchSize = minParallelSize//2
 
-    self.__batchSize = batchSize
-    self.__frameBuffer = np.zeros([batchSize,frameDim],dtype="int16")
-    self.extract_function = None
-    self.__minParallelBS = minParallelSize//2
-    # The dim of output feature
-    self.__dim = None
-    # A cache to storage computed feature by two parallel threads.
-    self.__featureCache = [None,None]
-    # reset some position flags
-    self.__reset_position_flag()
+  def core_loop(self):
 
-  def reset(self):
-    '''
-    Reset.
-    '''
-    super().reset()
-    self.__frameBuffer *= 0
-    self.__dim = None
-    self.__featureCache = [None,None]
-    self.__reset_position_flag()
-    
-  def __reset_position_flag(self):
-    self.__endpointStep = False
-    self.__finalStep = False
-    self.__tailIndex = self.__batchSize
+    self.__firstStep = True
 
-  def get_feat_dim(self):
-    '''
-    Get the dim. of feature.
-    '''
-    assert self.__dim is not None
-    return self.__dim
+    while True:
 
-  def __prepare_chunk_frame(self,framePIPE):
+      action = self.decide_action()
+      self.__featureCache = [[],[]]
 
-    timecost = 0
-    pos = 0
+      if action is True:
+        
+        packet = self.get_packet()
 
-    while pos < self.__batchSize:
-      # If frame PIPE has errors
-      if framePIPE.is_wrong():
-        self.kill()
-        return False
-      # If no more data
-      elif framePIPE.is_exhausted():
-        self.__tailIndex = pos
-        self.__finalStep = True
-        break
-      # If need wait because of receiving no data
-      elif framePIPE.is_empty():
-        time.sleep(info.TIMESCALE)
-        timecost += info.TIMESCALE
-        if timecost > info.TIMEOUT:
-          print(f"{self.name}: Timeout! Did not receive any data for a long time！")
-          # Try to kill frame PIPE
-          framePIPE.kill()
-          # Kill self 
-          self.kill()
-          return False
-      # If need wait because of blocked
-      elif framePIPE.is_blocked():
-        time.sleep(info.TIMESCALE)
-      # If had data
+        if not packet.is_empty():
+
+          iKey = packet.mainKey if self.iKey is None else self.iKey
+          mat = packet[ iKey ]
+          assert isinstance(mat, np.ndarray) and len(mat.shape) == 2
+
+          bsize = len(mat)
+          if self.__firstStep or len(mat) < self.__minParallelBatchSize:
+            newMat = self.__extract_function_( mat )
+            if isinstance(newMat,np.ndarray):
+              newMat = [newMat,]
+            else:
+              assert isinstance(newMat,(tuple,list))
+          else:
+            mid = bsize // 2
+
+            ### open thread 1 to compute first half part
+            thread1 = threading.Thread(target=self.__extract_parallel,args=(mat[0:mid],0,))
+            thread1.setDaemon(True)
+            thread1.start()
+            ### open thread 2 to compute second half part
+            thread2 = threading.Thread(target=self.__extract_parallel,args=(mat[mid:],1,))
+            thread2.setDaemon(True)
+            thread2.start()
+          
+            thread1.join()
+            thread2.join()
+            
+            if None in self.__featureCache:
+              raise Exception("Extraction functions had errors.")
+
+            ### Concat
+            newMat = []
+            for i in range( len(self.__featureCache[0]) ):
+              newMat.append( np.concatenate( [self.__featureCache[0][i],self.__featureCache[1][i]],axis=0) )
+
+          if self.__firstStep:
+            for mat in newMat:
+              assert (isinstance(mat,np.ndarray) and len(mat.shape) == 2) ,\
+                    "The output of feature function must be a ( 1d -> 1 frame or 2d -> N frames) Numpy array."
+              if mat.shape[0] != bsize:
+                print(f"{self.name}: Warning! The frames of features is lost.")
+            self.__firstStep = False
+
+          ## Append feature into PIPE if necessary.
+          for i,mat in enumerate(newMat):
+            packet.add(key=self.oKey[i],data=mat,asMainKey=True)
+
+        self.put_packet( packet )
+      
       else:
-        vec = framePIPE.get()
-        ## If this is an endpoint
-        if is_endpoint(vec):
-          self.__endpointStep = True
-          self.__tailIndex = pos
-          break
-        ## If this a value
-        else:
-          assert isinstance(vec,Vector), f"{self.name}: Need Vector packet but got: {type(vec).__name__}."
-          self.__frameBuffer[pos,:] = vec.data
-          pos += 1
-    # Pad the rest with zero 
-    self.__frameBuffer[pos:,:] = 0
+        break
 
-    return True
-  
   def __extract_parallel(self,featChunk,ID):
     '''
     A thread function to compute feature.
     '''
-    self.__featureCache[ID] = self.extract_function(featChunk)
-
-  def __compute_raw_feature(self,framePIPE):
-    print(f"{self.name}: Start...")
     try:
-      while True:
-        # try to prepare chunk frames
-        if not self.__prepare_chunk_frame(framePIPE):
-          break
-        # compute feature if necessary
-        if self.__tailIndex > 0:
-          ## If batch size is too small, do not use double threads.
-          if self.__tailIndex < self.__minParallelBS:
-            feats = self.extract_function(self.__frameBuffer[0:self.__tailIndex])
-          ## Do parallel computing
-          else:
-            mid = self.__tailIndex // 2
-            ### open thread 1 to compute first half part
-            thread1 = KillableThread(target=self.__extract_parallel,args=(self.__frameBuffer[0:mid],0,))
-            thread1.setDaemon(True)
-            thread1.start()
-            ### open thread 2 to compute second half part
-            thread2 = KillableThread(target=self.__extract_parallel,args=(self.__frameBuffer[mid:self.__tailIndex],1,))
-            thread2.setDaemon(True)
-            thread2.start()
-            ### wait ( kill and retry if timeout)
-            #timecost = 0
-            #tempTIMESCALE = 0.0001
-            #tempTIMEOUT = 2
-            #while thread1.is_alive():
-            #  time.sleep( tempTIMESCALE )
-            #  timecost += tempTIMESCALE
-            #  if timecost > tempTIMEOUT:
-            #    #### kill and retry
-            #    thread1.kill()
-            #    thread1 = KillableThread(target=self.__extract_parallel,args=(self.__frameBuffer[0:mid],0,))
-            #    thread1.setDaemon(True)
-            #    thread1.start()
-            #    timecost = 0
-            #timecost = 0
-            #while thread2.is_alive():
-            #  time.sleep( tempTIMESCALE )
-            #  timecost += tempTIMESCALE
-            #  if timecost > tempTIMEOUT:
-            #    #### kill and retry
-            #    thread2.kill()
-            #    thread2 = KillableThread(target=self.__extract_parallel,args=(self.__frameBuffer[mid:self.__tailIndex],1,))
-            #    thread2.setDaemon(True)
-            #    thread2.start()
-            #    timecost = 0
-            thread1.join()
-            thread2.join()
-            ### Concat
-            feats = np.concatenate(self.__featureCache,axis=0)
-
-        # If this the first computing, we will check the data format
-        if self.__dim is None:
-          assert (isinstance(feats,np.ndarray) and len(feats.shape) == 2) ,\
-                  "The output of feature function must be a ( 1d -> 1 frame or 2d -> N frames) Numpy array."
-          if feats.shape[0] != self.__tailIndex:
-            print(f"{self.name}: Warning! The frames of features is lost.")
-          self.__dim = feats.shape[1]
-        # Append feats into feature PIPE and do some processes
-        if self.is_wrong() or \
-           self.outPIPE.is_wrong() or \
-           self.outPIPE.is_terminated():
-          framePIPE.kill()
-          self.kill()
-          break
-        else: 
-          ## Append feature into PIPE if necessary.
-          for i in range(self.__tailIndex):
-            self.outPIPE.put( Vector(feats[i]) )
-          ## If arrived an endpoint step.
-          if self.__endpointStep:
-            self.outPIPE.put( ENDPOINT )
-            self.__reset_position_flag()
-          ## If over.
-          if self.__finalStep or self.is_terminated():
-            self.stop()
-            break
+      outs = self.__extract_function_(featChunk)
     except Exception as e:
-      framePIPE.kill()
-      self.kill()
+      self.__featureCache[ID] = None
       raise e
-    finally:
-      print(f"{self.name}: Stop!")
+    else:
+      if isinstance(outs,np.ndarray):
+        outs = [outs,]
+      else:
+        assert isinstance(outs,(tuple,list))
+      self.__featureCache[ID] = outs
 
-  def _start(self,inPIPE):
-    # Check the extract_function
-    assert self.extract_function is not None, "Please implement the feature extraction function."
-    # Run core thread
-    extractThread = KillableThread(target=self.__compute_raw_feature,args=(inPIPE,))
-    extractThread.setDaemon(True)
-    extractThread.start()
-    return extractThread
-
-class SpectrogramExtractor(ParallelFeatureExtractor):
+class SpectrogramExtractor(MatrixFeatureExtractor):
   '''
   Spectrogram feature extractor. 
   '''
-  def __init__(self,frameDim=400,batchSize=10,
-                energyFloor=0.0,rawEnergy=True,winType="povey",
+  def __init__(self,energyFloor=0.0,rawEnergy=True,winType="povey",
                 dither=1.0,removeDC=True,preemphCoeff=0.97,
                 blackmanCoeff=0.42,minParallelSize=10,
-                name=None):
+                oKey="data",name=None):
     '''
     Args:
       _frameDim_: (int) The dim. of frame.
@@ -709,23 +610,31 @@ class SpectrogramExtractor(ParallelFeatureExtractor):
       _minParallelSize_: (int) If _batchSize_ >= minParallelSize, run two threads to extract feature.
       _name_: (str) None.
     '''
-    super().__init__(frameDim=frameDim,batchSize=batchSize,minParallelSize=minParallelSize,name=name)
+    super().__init__(extFunc=self.__extract_function,minParallelSize=minParallelSize,oKey=oKey,name=name)
+
     assert isinstance(energyFloor,float) and energyFloor >= 0.0
     assert isinstance(rawEnergy,bool)
     assert isinstance(dither,float) and dither >= 0.0
     assert isinstance(removeDC,bool)
     assert isinstance(preemphCoeff,float) and 0 <= energyFloor <= 1
     assert isinstance(blackmanCoeff,float) and 0 < blackmanCoeff < 0.5
-    
     self.__energy_floor = np.log(energyFloor) if energyFloor > 0 else 0
     self.__need_raw_energy = rawEnergy
     self.__remove_dc_offset = removeDC
     self.__preemph_coeff = preemphCoeff
     self.__dither_factor = dither
-    self.__window = get_window_function(frameDim, winType, blackmanCoeff)
-    self.extract_function = self.__extract_function
+
+    self.__winInfo = (winType, blackmanCoeff)
+    self.__window = None
 
   def __extract_function(self,frames):
+
+    if self.__window is None:
+      frameDim = frames.shape[1]
+      self.__window = get_window_function(frameDim, 
+                                          self.__winInfo[0], 
+                                          self.__winInfo[1],
+                                        )
     
     if self.__dither_factor != 0: 
       frames = dither_singal_2d(frames, self.__dither_factor)
@@ -753,17 +662,17 @@ class SpectrogramExtractor(ParallelFeatureExtractor):
 
     return frames
 
-class FbankExtractor(ParallelFeatureExtractor):
+class FbankExtractor(MatrixFeatureExtractor):
   '''
   FBank feature extractor. 
   '''
-  def __init__(self,rate=16000,frameDim=400,batchSize=10,
+  def __init__(self,rate=16000,
                 energyFloor=0.0,useEnergy=False,rawEnergy=True,winType="povey",
                 dither=1.0,removeDC=True,preemphCoeff=0.97,
                 blackmanCoeff=0.42,usePower=True,
                 numBins=23,lowFreq=20,highFreq=0,useLog=True,
                 minParallelSize=10,
-                name=None):
+                oKey="data",name=None):
     '''
     Args:
       _rate_: (int) Sampling rate.
@@ -785,7 +694,7 @@ class FbankExtractor(ParallelFeatureExtractor):
       _minParallelSize_: (int) If _batchSize_ >= minParallelSize, run two threads to extract feature.
       _name_: (str) None.
     '''        
-    super().__init__(frameDim=frameDim,batchSize=batchSize,minParallelSize=minParallelSize,name=name)
+    super().__init__(extFunc=self.__extract_function,minParallelSize=minParallelSize,oKey=oKey,name=name)
     assert isinstance(rate,int) and rate > 0
     assert isinstance(energyFloor,float) and energyFloor >= 0.0
     assert isinstance(useEnergy,bool)
@@ -807,16 +716,28 @@ class FbankExtractor(ParallelFeatureExtractor):
     self.__dither = dither
     self.__usePower = usePower
     self.__useLog = useLog
-    self.__window = get_window_function(frameDim,winType,blackmanCoeff)
-    
-    self.__fftLen = get_padded_fft_length(frameDim)
-    self.__melInfo = (numBins,self.__fftLen,lowFreq,highFreq)
-    self.__melFilters = get_mel_bins(numBins,rate,self.__fftLen,lowFreq,highFreq)
-
-    self.extract_function = self.__extract_function
+  
+    self.__winInfo = (winType, blackmanCoeff)
+    self.__window = None
+    self.__melInfo = (numBins,rate,lowFreq,highFreq)
+    self.__melFilters = None
 
   def __extract_function(self,frames):
     
+    if self.__window is None:
+      frameDim = frames.shape[1]
+      self.__window = get_window_function(frameDim, 
+                                          self.__winInfo[0], 
+                                          self.__winInfo[1],
+                                        )
+      fftLen = get_padded_fft_length(frameDim)
+      self.__melFilters = get_mel_bins(self.__melInfo[0],
+                                       self.__melInfo[1],
+                                       fftLen,
+                                       self.__melInfo[2],
+                                       self.__melInfo[3],
+                                      )
+
     if self.__dither != 0:
       frames = dither_singal_2d(frames, self.__dither)
     if self.__remove_dc_offset:
@@ -848,18 +769,18 @@ class FbankExtractor(ParallelFeatureExtractor):
 
     return frames
 
-class MfccExtractor(ParallelFeatureExtractor):
+class MfccExtractor(MatrixFeatureExtractor):
   '''
   MFCC feature extractor. 
   '''
-  def __init__(self,rate=16000,frameDim=400,batchSize=10,
+  def __init__(self,rate=16000,
                 energyFloor=0.0,useEnergy=True,rawEnergy=True,winType="povey",
                 dither=1.0,removeDC=True,preemphCoeff=0.97,
                 blackmanCoeff=0.42,
                 numBins=23,lowFreq=20,highFreq=0,useLog=True,
                 cepstralLifter=22,numCeps=13,
                 minParallelSize=10,
-                name=None):
+                oKey="data",name=None):
     '''
     Args:
       _rate_: (int) Sampling rate.
@@ -882,7 +803,7 @@ class MfccExtractor(ParallelFeatureExtractor):
       _minParallelSize_: (int) If _batchSize_ >= minParallelSize, run two threads to extract feature.
       _name_: (str) None.
     '''     
-    super().__init__(frameDim=frameDim,batchSize=batchSize,minParallelSize=minParallelSize,name=name)
+    super().__init__(extFunc=self.__extract_function,minParallelSize=minParallelSize,oKey=oKey,name=name)
     assert isinstance(rate,int)
     assert isinstance(energyFloor,float) and energyFloor >= 0.0
     assert isinstance(dither,float) and dither >= 0.0
@@ -904,11 +825,11 @@ class MfccExtractor(ParallelFeatureExtractor):
     self.__preemph_coeff = preemphCoeff
     self.__dither = dither
     self.__useLog = useLog
-    self.__window = get_window_function(frameDim,winType,blackmanCoeff)
     
-    self.__fftLen = get_padded_fft_length(frameDim)
-    self.__melInfo = (numBins,self.__fftLen,lowFreq,highFreq)
-    self.__melFilters = get_mel_bins(numBins,rate,self.__fftLen,lowFreq,highFreq)
+    self.__winInfo = (winType, blackmanCoeff)
+    self.__window = None
+    self.__melInfo = (numBins,rate,lowFreq,highFreq)
+    self.__melFilters = None
 
     self.__dctMat = get_dct_matrix(numCeps=numCeps,numBins=numBins)
     if cepstralLifter > 0:
@@ -916,10 +837,22 @@ class MfccExtractor(ParallelFeatureExtractor):
     else:
       self.__cepsCoeff = 1
 
-    self.extract_function = self.__extract_function
-
   def __extract_function(self,frames):
-    
+  
+    if self.__window is None:
+      frameDim = frames.shape[1]
+      self.__window = get_window_function(frameDim, 
+                                          self.__winInfo[0], 
+                                          self.__winInfo[1],
+                                        )
+      fftLen = get_padded_fft_length(frameDim)
+      self.__melFilters = get_mel_bins(self.__melInfo[0],
+                                       self.__melInfo[1],
+                                       fftLen,
+                                       self.__melInfo[2],
+                                       self.__melInfo[3],
+                                      )
+
     if self.__dither != 0:
       frames = dither_singal_2d(frames, self.__dither)
     if self.__remove_dc_offset:
@@ -949,12 +882,12 @@ class MfccExtractor(ParallelFeatureExtractor):
 
     return frames
 
-class MixtureExtractor(ParallelFeatureExtractor):
+class MixtureExtractor(MatrixFeatureExtractor):
   '''
   Mixture feature extractor.
   You can extract Mixture of "spectrogram", "fbank" and "mfcc" in the same time. 
   '''
-  def __init__(self,frameDim,batchSize=10,
+  def __init__(self,
                 mixType=["mfcc","fbank"],
                 rate=16000,dither=0.0,rawEnergy=True,winType="povey",
                 removeDC=True,preemphCoeff=0.97,
@@ -965,16 +898,22 @@ class MixtureExtractor(ParallelFeatureExtractor):
                 useLogForFbank=True,
                 useEnergyForMfcc=True,
                 cepstralLifter=22,numCeps=13,
-                minParallelSize=10,name=None):
-    super().__init__(frameDim=frameDim,batchSize=batchSize,
-                     minParallelSize=minParallelSize,name=name)
-   
+                minParallelSize=10,oKeys=None,name=None):
+
     # Check the mixture type
     assert isinstance(mixType,(list,tuple)), f"{self.name}: <mixType> should be a list or tuple."
     for featType in mixType:
       assert featType in ["mfcc","fbank","spectrogram"], f'{self.name}: <mixType> should be "mfcc","fbank","spectrogram".' 
     assert len(mixType) == len(set(mixType)) and len(mixType) > 1
     self.__mixType = mixType
+
+    if oKeys is None:
+      oKeys = mixType
+    else:
+      assert isinstance(oKeys,(tuple,list)) and len(oKeys) == len(mixType)
+
+    super().__init__(extFunc=self.__extract_function,
+                     minParallelSize=minParallelSize,oKey=oKeys,name=name)
 
     # Some parameters for basic computing
     assert isinstance(rate,int)
@@ -987,7 +926,8 @@ class MixtureExtractor(ParallelFeatureExtractor):
     assert isinstance(preemphCoeff,float) and 0 <= energyFloor <= 1
     self.__preemph_coeff = preemphCoeff
     assert isinstance(blackmanCoeff,float) and 0 < blackmanCoeff < 0.5
-    self.__window = get_window_function(frameDim,winType,blackmanCoeff)
+    self.__winInfo = (winType,blackmanCoeff)
+    self.__window = None
     assert isinstance(energyFloor,float) and energyFloor >= 0.0
     self.__energy_floor = np.log(energyFloor) if energyFloor > 0 else 0 #????
     
@@ -996,9 +936,9 @@ class MixtureExtractor(ParallelFeatureExtractor):
     assert isinstance(lowFreq,int) and isinstance(highFreq,int) and lowFreq >= 0
     if highFreq != 0 :
       assert highFreq > lowFreq
-    self.__fftLen = get_padded_fft_length(frameDim)
-    self.__melInfo = (numBins,self.__fftLen,lowFreq,highFreq)
-    self.__melFilters = get_mel_bins(numBins,rate,self.__fftLen,lowFreq,highFreq)
+    self.__fftLen = None
+    self.__melInfo = (numBins,rate,lowFreq,highFreq)
+    self.__melFilters = None
     assert isinstance(useEnergyForFbank,bool)
     self.__use_energy_fbank = useEnergyForFbank
     assert isinstance(useLogForFbank,bool)
@@ -1010,17 +950,28 @@ class MixtureExtractor(ParallelFeatureExtractor):
     assert isinstance(cepstralLifter,int) and numBins >= 0
     assert isinstance(numCeps,int) and 0 < numCeps <= numBins
     assert isinstance(useEnergyForMfcc,bool)
-    self.__use_energy_mfcc = useEnergyForMfcc  
+    self.__use_energy_mfcc = useEnergyForMfcc
     self.__dctMat = get_dct_matrix(numCeps=numCeps,numBins=numBins)
     if cepstralLifter > 0:
       self.__cepsCoeff = get_cepstral_lifter_coeff(dim=numCeps,factor=cepstralLifter)
     else:
       self.__cepsCoeff = 1
 
-    # Core computing function
-    self.extract_function = self.__extract_function
-
   def __extract_function(self,frames):
+
+    if self.__window is None:
+      frameDim = frames.shape[1]
+      self.__window = get_window_function(frameDim, 
+                                          self.__winInfo[0], 
+                                          self.__winInfo[1],
+                                        )
+      fftLen = get_padded_fft_length(frameDim)
+      self.__melFilters = get_mel_bins(self.__melInfo[0],
+                                       self.__melInfo[1],
+                                       fftLen,
+                                       self.__melInfo[2],
+                                       self.__melInfo[3],
+                                      )
 
     # Dither singal
     if self.__dither_factor != 0: 
@@ -1047,14 +998,14 @@ class MixtureExtractor(ParallelFeatureExtractor):
     # Power spectrogram
     frames = compute_power_spectrum_2d(frames)
     
-    outFeats = dict((name,None) for name in self.__mixType)
+    outFeats = {}
     # Compute the spectrogram feature
     if "spectrogram" in self.__mixType:
       specFrames = frames.copy()
       specFrames = apply_floor( specFrames )
       specFrames = np.log( specFrames )
       specFrames[:,0] = energies
-      outFeats["spectrogram"] = specFrames
+      outFeats[ self.oKey[ self.__mixType.index("spectrogram") ] ] = specFrames
 
     # Compute the fbank feature
     if "fbank" in self.__mixType:
@@ -1067,7 +1018,7 @@ class MixtureExtractor(ParallelFeatureExtractor):
         fbankFrames = np.log(fbankFrames)
       if self.__use_energy_fbank:
         fbankFrames = np.concatenate([energies[:,None],fbankFrames],axis=1)
-      outFeats["fbank"] = fbankFrames
+      outFeats[ self.oKey[ self.__mixType.index("fbank") ] ] = fbankFrames
 
     # Compute the mfcc feature
     if "mfcc" in self.__mixType:
@@ -1079,14 +1030,9 @@ class MixtureExtractor(ParallelFeatureExtractor):
       mfccFeats = mfccFeats * self.__cepsCoeff
       if self.__use_energy_mfcc:
         mfccFeats[:,0] = energies
-      outFeats["mfcc"] = mfccFeats
-
-    # Merge the features
-    finalFeats = []
-    for featType in self.__mixType:
-      finalFeats.append( outFeats[featType] )
+      outFeats[ self.oKey[ self.__mixType.index("mfcc") ] ] = mfccFeats
   
-    return np.concatenate(finalFeats, axis=1)
+    return tuple(outFeats.values())
 
 ###############################################
 # 2. Some functions for Online CMVN
@@ -1463,17 +1409,14 @@ class FrameSlideCMVNormalizer(CMVNormalizer):
 # 3. Some functions for raw feature processing
 ###############################################
 
-class FeatureProcessor(Component):
+class MatrixFeatureProcessor(Component):
   '''
   The feature processor.
   '''
-  def __init__(self,featDim,batchSize=32,
-                    delta=0,deltaWindow=2,spliceLeft=0,spliceRight=0,
-                    cmvNormalizer=None,lda=None,name=None):
+  def __init__(self,delta=0,deltaWindow=2,spliceLeft=0,spliceRight=0,
+                    cmvNormalizer=None,lda=None,oKey="data",name=None):
     '''
     Args:
-      _featDim_: (int) The dim. of feature.
-      _batchSize_: (int) The batch size.
       _delta_: (int) The order of delta.
       _deltaWindow_: (int) The window size of delta.
       _spliceLeft_: (int) Left context to splice.
@@ -1482,19 +1425,15 @@ class FeatureProcessor(Component):
       _lda_: (str, 2-d array) LDA file path or 2-d np.ndarray.
       _name_: (str) Name.
     '''
-    super().__init__(name=name)
-    assert isinstance(featDim,int) and featDim > 0
-    assert isinstance(batchSize,int) and batchSize > 0
+    super().__init__(oKey=oKey,name=name)
     assert isinstance(delta,int) and delta >= 0
     assert isinstance(deltaWindow,int) and deltaWindow > 0
     assert isinstance(spliceLeft,int) and spliceLeft >= 0
     assert isinstance(spliceRight,int) and spliceRight >= 0
 
-    self.__batchSize = batchSize
     self.__delta = delta
     self.__deltaWindow = deltaWindow
-    self.__spliceLeft = spliceLeft
-    self.__spliceRight = spliceRight
+    self.__context = ContextManager(spliceLeft,spliceRight)
 
     # Config LDA
     if lda is not None:
@@ -1505,34 +1444,10 @@ class FeatureProcessor(Component):
         self.__ldaMat = lda
     else:
       self.__ldaMat = None
-    # Config some size parameters
-    self.__center = batchSize
-    self.__left = delta + spliceLeft
-    self.__right = delta + spliceRight
-    self.__cover = self.__left + self.__right
-    self.__width = self.__center + self.__left + self.__right
-    self.__shift = self.__center
-    # Prepare a work place
-    self.__featureBuffer = np.zeros([self.__width,featDim],dtype="float32")
     # Config CMVNs
     self.__cmvns = []
     if cmvNormalizer is not None:
       self.set_cmvn(cmvNormalizer)
-    # The output feature dim
-    self.__dim = None
-    # The process function
-    self.process_function = None
-    # Config some position flags
-    self.__reset_position_flag()
-
-  def reset(self):
-    '''
-    This function will be called by .reset method.
-    '''
-    super().reset()
-    self.__featureBuffer *= 0
-    self.__dim = None
-    self.__reset_position_flag()
 
   def set_cmvn(self,cmvn,index=-1):
     assert isinstance(cmvn,CMVNormalizer),f"{self.name}: <cmvNormalizer> mush be a CMVNormalizer object but got: {type(cmvn).__name__}."
@@ -1542,162 +1457,67 @@ class FeatureProcessor(Component):
       assert isinstance(index,int) and 0 <= index < len(self.__cmvns)
       self.__cmvns[index] = cmvn
 
-  def __reset_position_flag(self):
-    self.__zerothStep = True
-    self.__firstStep = False
-    self.__endpointStep = False
-    self.__finalStep = False
-    self.__tailIndex = self.__width
-    self.__duration = 0
+  def __transform_function(self,feats):
+    ## do the cmvn firstly.
+    ## We will save the new cmvn feature instead of raw feature buffer.
+    if len(self.__cmvns) > 0:
+      for cmvn in self.__cmvns:
+        feats = cmvn.apply( feats )
 
-  def get_feat_dim(self):
-    assert self.__dim is not None
-    return self.__dim
+    ## then compute context 
+    #print( "debug 1:", feats.shape )
+    feats = self.__context.wrap( feats )
+    if feats is None:
+      return None
+    #print( "debug 2:", feats.shape )
 
-  def __default_process_function(self,feats):
-    '''
-    Note than: CMVN has been done before this step.
-    '''
     # Add delta
     if self.__delta > 0: 
       feats = add_deltas(feats,order=self.__delta,window=self.__deltaWindow)
     # Splice
-    if self.__spliceLeft != 0 or self.__spliceRight != 0: 
-      feats = splice_feats(feats,left=self.__spliceLeft,right=self.__spliceRight)
+    if self.__context.left > 0 or self.__context.right != 0: 
+      feats = splice_feats(feats,left=self.__context.left,right=self.__context.right)
     # Use LDA transform
     if self.__ldaMat is not None: 
       feats = feats.dot(self.__ldaMat)
 
+    feats = self.__context.strip( feats )
     return feats
 
-  def __prepare_chunk_feature(self,featurePIPE):
-    '''
-    Prepare chunk stream to compute feature.
-    '''
-    timecost = 0
+  def core_loop(self):
 
-    # copy old data if necessary
-    if self.__zerothStep:
-      pos = 0
-      self.__zerothStep = False
-      self.__firstStep = True
-    else:
-      self.__featureBuffer[0:self.__cover,:] = self.__featureBuffer[ self.__center:,: ]
-      pos = self.__cover
-      self.__firstStep = False
-    # append new data
-    while pos < self.__width:
-      # if feature PIPE had errors
-      if featurePIPE.is_wrong():
-        self.kill()
-        return False
-      # if no more data
-      elif featurePIPE.is_exhausted():
-        self.__tailIndex = pos
-        self.__finalStep = True
-        break
-      # If need wait because of receiving no data
-      elif featurePIPE.is_empty():
-        time.sleep(info.TIMESCALE)
-        timecost += info.TIMESCALE
-        if timecost > info.TIMEOUT:
-          print(f"{self.name}: Timeout! Did not receive any data for a long time！")
-          # Try to kill frame PIPE
-          featurePIPE.kill()
-          # Kill self
-          self.kill()
-          return False
-      # If need wait because of blocked
-      elif featurePIPE.is_blocked():
-        time.sleep(info.TIMESCALE)
-      # If had data
+    lastPacket = None
+    while True:
+  
+      action = self.decide_action()
+
+      if action is True:
+        packet = self.get_packet()
+        if not packet.is_empty():
+          iKey = packet.mainKey if self.iKey is None else self.iKey
+          newMat = self.__transform_function( packet[iKey] )
+          if newMat is None:
+            lastPacket = packet
+          else:
+            if lastPacket is None:
+              packet.add( self.oKey[0], newMat, asMainKey=True )
+              self.put_packet( packet )
+            else:
+              lastPacket.add( self.oKey[0], newMat, asMainKey=True )
+              self.put_packet( lastPacket )
+              lastPacket = packet
+
+        if is_endpoint(packet):
+          if lastPacket is not None:
+            iKey = lastPacket.mainKey if self.iKey is None else self.iKey
+            newMat = self.__transform_function( np.zeros_like(lastPacket[iKey]) )
+            lastPacket.add( self.oKey[0], newMat, asMainKey=True )
+            self.put_packet( lastPacket )
+
+          if packet.is_empty():
+            self.put_packet( packet )
+      
       else:
-        vec = featurePIPE.get()
-        ##
-        if is_endpoint(vec):
-          self.__endpointStep = True
-          self.__tailIndex = pos
-          break
-        ##
-        else:
-          assert isinstance(vec,Vector), f"{self.name}: Need Vector packet but got: {type(vec).__name__}."
-          self.__featureBuffer[pos,:] = vec.data
-          pos += 1
-          self.__duration += 1
-    # padding the rest with zero 
-    self.__featureBuffer[pos:,:] = 0
-    
-    return True
+        break
 
-  def __process_feature(self,featurePIPE):
-    print( f"{self.name}: Start..." )
-    try:
-      while True:
-        # prepare a chunk of frames
-        self.__featureBuffer.flags.writeable = True
-        if not self.__prepare_chunk_feature(featurePIPE): 
-          break
-        # If no data has been collected
-        if self.__duration == 0:
-          if self.__finalStep:
-            self.outPIPE.put( ENDPOINT )
-            self.stop()
-            break
-          else:
-            continue
-        # If there are data need to be computed
-        # There are three case
-        # 1. did not encounter any endpoint or final flag
-        # 2. the endpoint or final flag occurred at the first frame (the tail index is self.__cover)
-        # 3. the endpoint or final flag occurred at the another frame (the tail index is in (self.__cover,self.__width))
-        else:
-          ## do the cmvn firstly.
-          ## We will save the new cmvn feature instead of raw feature buffer.
-          if len(self.__cmvns) > 0:
-            startpos = 0 if self.__firstStep else self.__cover
-            endpos = self.__tailIndex
-            for cmvn in self.__cmvns:
-              cmvnFeat = cmvn.apply( self.__featureBuffer[startpos:endpos,:] )
-              self.__featureBuffer[startpos:endpos,:] = cmvnFeat
-          self.__featureBuffer.flags.writeable = False
-          ## process raw feature
-          feats = self.process_function( self.__featureBuffer[:self.__tailIndex,:] )
-          self.__dim = feats.shape[-1]
-          ## append new feature into PIPE
-          if self.is_wrong() or \
-             self.outPIPE.is_wrong() or \
-             self.outPIPE.is_terminated():
-            featurePIPE.kill()
-            self.kill()
-            break
-          else:
-            ### get the start index of new feats
-            avaliableLeft = 0 if self.__firstStep else self.__left
-            avaliableRight = self.__tailIndex if (self.__endpointStep or self.__finalStep) else (self.__left + self.__center)
-            
-            for frame in feats[ avaliableLeft : avaliableRight ]:
-              self.outPIPE.put( Vector(frame) )
-            ### if arrived endpoint
-            if self.__endpointStep:
-              self.outPIPE.put( ENDPOINT )
-              self.__reset_position_flag()
-            ### if over
-            if self.__finalStep or self.is_terminated():
-              self.stop()
-              break
-    except Exception as e:
-      featurePIPE.kill()
-      self.kill()
-      raise e
-    finally:
-      print( f"{self.name}: Stop!")
-
-  def _start(self,inPIPE):
-
-    if self.process_function is None:
-      self.process_function = self.__default_process_function
-    
-    processThread = KillableThread(target=self.__process_feature, args=(inPIPE,))
-    processThread.setDaemon(True)
-    processThread.start()
-    return processThread
+        

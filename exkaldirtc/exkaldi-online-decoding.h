@@ -118,6 +118,7 @@ class ExkaldiSingalUtteranceDecoder
     bool IsLastDecoding(){ return decodable_.ArrivedLastChunk(); }
 
     int32 IsTermination(){ return decodable_.IsTermination(); }
+    int32 IsEndpoint(){ return decodable_.IsEndpoint(); }
 
   private:
     ExkaldiOnlineDecodingConfig config_;

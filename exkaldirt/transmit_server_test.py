@@ -1,39 +1,28 @@
-from exkaldirt import base,transmit
-import os
+import base
+import transmit
+import numpy as np
 
-#################################
-# Test sending value packets
-#################################
+#############################
+# exkaldirt.transmit.PacketReceiver
+# is used to receive packet from remote host computer.
+#############################
 
-def receive_value_packets():
+def test_receiver():
 
-  receiver = transmit.PacketReceiver(
-            bport = 9509,
-          )
+  # define a receiver, bind local host IP and a port
+  receiver = transmit.PacketReceiver(bport=9509)
 
-  receiver.decode_function = transmit.decode_value_packet
-
+  # run
   receiver.start()
   receiver.wait()
-  print(receiver.outPIPE.size())
 
-#receive_value_packets()
+  print( receiver.outPIPE.size() )
+  #
+  while True:
+    if receiver.outPIPE.is_empty():
+      break
+    packet = receiver.outPIPE.get()
+    print( packet.items() )
 
-#################################
-# Test sending text packets
-#################################
-
-def receive_text_packets():
-
-  receiver = transmit.PacketReceiver(
-            bport = 9509,
-          )
-
-  receiver.decode_function = transmit.decode_text_packet
-
-  #receiver.start()
-  #receiver.wait()
-  #print(receiver.outPIPE.size())
-  base.dynamic_run(receiver)
-
-receive_text_packets()
+test_receiver()
+    
