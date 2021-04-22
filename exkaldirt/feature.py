@@ -27,15 +27,15 @@ import numpy as np
 import subprocess
 from collections import namedtuple
 
-#from exkaldirt.base import ExKaldiRTBase, Component, PIPE, Tunnel, Packet
-#from exkaldirt.utils import run_exkaldi_shell_command
-#from exkaldirt.base import info
-#from exkaldirt.base import ENDPOINT, is_endpoint, NullPIPE
+from exkaldirt.base import ExKaldiRTBase, Component, PIPE, Packet, ContextManager
+from exkaldirt.utils import run_exkaldi_shell_command, encode_vector_temp
+from exkaldirt.base import info, mark, print_
+from exkaldirt.base import Endpoint, is_endpoint, NullPIPE
 
-from base import ExKaldiRTBase, Component, PIPE, Tunnel, Packet, ContextManager
-from utils import run_exkaldi_shell_command, encode_vector_temp
-from base import info, mark, print_
-from base import ENDPOINT, is_endpoint, NullPIPE
+#from base import ExKaldiRTBase, Component, PIPE, Packet, ContextManager
+#from utils import run_exkaldi_shell_command, encode_vector_temp
+#from base import info, mark, print_
+#from base import Endpoint, is_endpoint, NullPIPE
 
 import sys
 sys.path.append( info.CMDROOT )
@@ -513,28 +513,28 @@ class MatrixFeatureExtractor(Component):
     while True:
 
       action = self.decide_action()
-      self.__featureCache = [None,None]
+      self.__featureCache = [[],[]]
 
-      if action is False:
-        break
-      elif action is None:
-        self.outPIPE.stop()
-        break
-      else:
+      if action is True:
+        
         packet = self.get_packet()
-        if is_endpoint(packet):
-          self.put_packet( ENDPOINT )
-          continue
-        else:
+
+        if not packet.is_empty():
+
           iKey = packet.mainKey if self.iKey is None else self.iKey
           mat = packet[ iKey ]
           assert isinstance(mat, np.ndarray) and len(mat.shape) == 2
 
           bsize = len(mat)
-          if len(mat) < self.__minParallelBatchSize:
+          if self.__firstStep or len(mat) < self.__minParallelBatchSize:
             newMat = self.__extract_function_( mat )
+            if isinstance(newMat,np.ndarray):
+              newMat = [newMat,]
+            else:
+              assert isinstance(newMat,(tuple,list))
           else:
             mid = bsize // 2
+
             ### open thread 1 to compute first half part
             thread1 = threading.Thread(target=self.__extract_parallel,args=(mat[0:mid],0,))
             thread1.setDaemon(True)
@@ -546,24 +546,47 @@ class MatrixFeatureExtractor(Component):
           
             thread1.join()
             thread2.join()
+            
+            if None in self.__featureCache:
+              raise Exception("Extraction functions had errors.")
+
             ### Concat
-            newMat = np.concatenate(self.__featureCache,axis=0)
+            newMat = []
+            for i in range( len(self.__featureCache[0]) ):
+              newMat.append( np.concatenate( [self.__featureCache[0][i],self.__featureCache[1][i]],axis=0) )
 
           if self.__firstStep:
-            assert (isinstance(newMat,np.ndarray) and len(newMat.shape) == 2) ,\
-                  "The output of feature function must be a ( 1d -> 1 frame or 2d -> N frames) Numpy array."
-            if newMat.shape[0] != bsize:
-              print(f"{self.name}: Warning! The frames of features is lost.")
+            for mat in newMat:
+              assert (isinstance(mat,np.ndarray) and len(mat.shape) == 2) ,\
+                    "The output of feature function must be a ( 1d -> 1 frame or 2d -> N frames) Numpy array."
+              if mat.shape[0] != bsize:
+                print(f"{self.name}: Warning! The frames of features is lost.")
+            self.__firstStep = False
 
           ## Append feature into PIPE if necessary.
-          packet.add(key=self.oKey[0],data=newMat,asMainKey=True)
-          self.put_packet( packet )
+          for i,mat in enumerate(newMat):
+            packet.add(key=self.oKey[i],data=mat,asMainKey=True)
+
+        self.put_packet( packet )
+      
+      else:
+        break
 
   def __extract_parallel(self,featChunk,ID):
     '''
     A thread function to compute feature.
     '''
-    self.__featureCache[ID] = self.__extract_function_(featChunk)
+    try:
+      outs = self.__extract_function_(featChunk)
+    except Exception as e:
+      self.__featureCache[ID] = None
+      raise e
+    else:
+      if isinstance(outs,np.ndarray):
+        outs = [outs,]
+      else:
+        assert isinstance(outs,(tuple,list))
+      self.__featureCache[ID] = outs
 
 class SpectrogramExtractor(MatrixFeatureExtractor):
   '''
@@ -601,15 +624,17 @@ class SpectrogramExtractor(MatrixFeatureExtractor):
     self.__preemph_coeff = preemphCoeff
     self.__dither_factor = dither
 
-    self.__winType = winType
-    self.__blackmanCoeff = blackmanCoeff
+    self.__winInfo = (winType, blackmanCoeff)
     self.__window = None
 
   def __extract_function(self,frames):
 
     if self.__window is None:
-      frameDim = frames.shape[0]
-      self.__window = get_window_function(frameDim, self.__winType, self.__blackmanCoeff)
+      frameDim = frames.shape[1]
+      self.__window = get_window_function(frameDim, 
+                                          self.__winInfo[0], 
+                                          self.__winInfo[1],
+                                        )
     
     if self.__dither_factor != 0: 
       frames = dither_singal_2d(frames, self.__dither_factor)
@@ -912,7 +937,7 @@ class MixtureExtractor(MatrixFeatureExtractor):
     if highFreq != 0 :
       assert highFreq > lowFreq
     self.__fftLen = None
-    self.__melInfo = (rate,numBins,lowFreq,highFreq)
+    self.__melInfo = (numBins,rate,lowFreq,highFreq)
     self.__melFilters = None
     assert isinstance(useEnergyForFbank,bool)
     self.__use_energy_fbank = useEnergyForFbank
@@ -973,14 +998,14 @@ class MixtureExtractor(MatrixFeatureExtractor):
     # Power spectrogram
     frames = compute_power_spectrum_2d(frames)
     
-    outFeats = dict((name,None) for name in self.__mixType)
+    outFeats = {}
     # Compute the spectrogram feature
     if "spectrogram" in self.__mixType:
       specFrames = frames.copy()
       specFrames = apply_floor( specFrames )
       specFrames = np.log( specFrames )
       specFrames[:,0] = energies
-      outFeats["spectrogram"] = specFrames
+      outFeats[ self.oKey[ self.__mixType.index("spectrogram") ] ] = specFrames
 
     # Compute the fbank feature
     if "fbank" in self.__mixType:
@@ -993,7 +1018,7 @@ class MixtureExtractor(MatrixFeatureExtractor):
         fbankFrames = np.log(fbankFrames)
       if self.__use_energy_fbank:
         fbankFrames = np.concatenate([energies[:,None],fbankFrames],axis=1)
-      outFeats["fbank"] = fbankFrames
+      outFeats[ self.oKey[ self.__mixType.index("fbank") ] ] = fbankFrames
 
     # Compute the mfcc feature
     if "mfcc" in self.__mixType:
@@ -1005,14 +1030,9 @@ class MixtureExtractor(MatrixFeatureExtractor):
       mfccFeats = mfccFeats * self.__cepsCoeff
       if self.__use_energy_mfcc:
         mfccFeats[:,0] = energies
-      outFeats["mfcc"] = mfccFeats
-
-    # Merge the features
-    finalFeats = []
-    for featType in self.__mixType:
-      finalFeats.append( outFeats[featType] )
+      outFeats[ self.oKey[ self.__mixType.index("mfcc") ] ] = mfccFeats
   
-    return np.concatenate(finalFeats, axis=1)
+    return tuple(outFeats.values())
 
 ###############################################
 # 2. Some functions for Online CMVN
@@ -1468,25 +1488,16 @@ class MatrixFeatureProcessor(Component):
 
     lastPacket = None
     while True:
-      
+  
       action = self.decide_action()
 
-      if action is False:
-        break
-      elif action is None:
-        self.outPIPE.stop()
-        break
-      else:
+      if action is True:
         packet = self.get_packet()
-
-        if is_endpoint(packet):
-          self.put_packet( ENDPOINT )
-        else:
+        if not packet.is_empty():
           iKey = packet.mainKey if self.iKey is None else self.iKey
           newMat = self.__transform_function( packet[iKey] )
           if newMat is None:
             lastPacket = packet
-            continue
           else:
             if lastPacket is None:
               packet.add( self.oKey[0], newMat, asMainKey=True )
@@ -1495,4 +1506,18 @@ class MatrixFeatureProcessor(Component):
               lastPacket.add( self.oKey[0], newMat, asMainKey=True )
               self.put_packet( lastPacket )
               lastPacket = packet
+
+        if is_endpoint(packet):
+          if lastPacket is not None:
+            iKey = lastPacket.mainKey if self.iKey is None else self.iKey
+            newMat = self.__transform_function( np.zeros_like(lastPacket[iKey]) )
+            lastPacket.add( self.oKey[0], newMat, asMainKey=True )
+            self.put_packet( lastPacket )
+
+          if packet.is_empty():
+            self.put_packet( packet )
+      
+      else:
+        break
+
         

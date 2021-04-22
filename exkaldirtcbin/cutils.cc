@@ -129,5 +129,5 @@ PYBIND11_MODULE(cutils,m){
   m.def("dither",&dither,"Dither.");
   m.def("srfft",&srfft,"Do split radix real FFT.");
   m.def("splice_feat",&splice_feat,"Splice feature.");
-  m.def("add_deltas",&add_delta,"Add delta features.");
+  m.def("add_deltas",&add_deltas,"Add delta features.");
 }

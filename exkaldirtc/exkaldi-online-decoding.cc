@@ -80,14 +80,35 @@ bool ExkaldiDecodableOnline::RecieveFrames(const int timeout, const int timescal
 
       //Read Header
       cin >> flag;
+      //std::cout << "read flag done:" << flag << std::endl;
       if (flag == -3){
         Terminate();
         return false;
       }
       else if (flag == -2){
-        SetEndpoint();
-        last_frame_id_ = frames_ready_;
-        return false;
+        //SetEndpoint();
+        //last_frame_id_ = frames_ready_;
+        //return false;
+        cin >> frames;
+        if (frames > 0){
+          if ( !( frames >=0 && frames <= opts_.chunk_frames )) 
+          KALDI_ASSERT( frames >=0 && frames <= opts_.chunk_frames);
+          for (int32 i=0; i<frames; i++){
+            for (int32 j=0; j<pdf_ids_; j++){
+              cin >> loglikes_(i,j);
+            }
+          }
+          frames_ready_ += frames;
+          available_frames_ = frames;
+
+          SetEndpoint();
+          last_frame_id_ = frames_ready_;
+          return true;
+        } else {
+          SetEndpoint();
+          last_frame_id_ = frames_ready_;
+          return false;          
+        }
       }
       else if (flag == -1){
 
@@ -192,10 +213,10 @@ int EmitFinalResult(CompactLattice &clat,
                     int32 N_best)
 { 
   // Scale lattice
-  if (acwt) { 
-    BaseFloat inv_acoustic_scale = 1.0/acwt;
-    fst::ScaleLattice(fst::AcousticLatticeScale(inv_acoustic_scale), &clat);
-    }
+  //if (acwt) { 
+  //  BaseFloat inv_acoustic_scale = 1.0/acwt;
+  //  fst::ScaleLattice(fst::AcousticLatticeScale(inv_acoustic_scale), &clat);
+  //  }
   fst::ScaleLattice(fst::LatticeScale(lmwt, 1.0), &clat);
   
   //Apply word boundary

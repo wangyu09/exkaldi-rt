@@ -107,16 +107,15 @@ int main(int argc, char *argv[])
     { 
       // get chunk frames
       bool flag = decoder.RecieveFrames(TIMEOUT,TIMESCALE);
-
+      // if received data
       if (flag)
       {
         decoder.AdvanceDecoding();
         if (decoder.IsLastDecoding()) {break;}
+        if (decoder.IsEndpoint()) {break;}
 
         bool segover = decoder.EndpointDetected(ec_config,frame_shift_in_seconds);
-        if (segover) { 
-          break;
-        }
+        if (segover) { break;}
 
         Lattice lat;
         decoder.GetBestPath(false, &lat);
@@ -136,19 +135,20 @@ int main(int argc, char *argv[])
     }
 
     if ( decoder.NumFramesDecoded() == 0 ){
-      continue;
+      std::cout << "-2 " << std::endl;
+      std::cout.flush();
     }
+    else {
+      decoder.FinalizeDecoding();
+      CompactLattice clat;
+      decoder.GetLattice(true, &clat);
 
-    decoder.FinalizeDecoding();
-    CompactLattice clat;
-    decoder.GetLattice(true, &clat);
-
-    EmitFinalResult(clat, de_opts.acoustic_scale, lm_scale, word_boundary_info,
-                      trans_model, n_bests);
-    
-    std::cout << std::endl;
-    std::cout.flush(); 
-
+      EmitFinalResult(clat, de_opts.acoustic_scale, lm_scale, word_boundary_info,
+                        trans_model, n_bests);
+      
+      std::cout << std::endl;
+      std::cout.flush(); 
+    }
   }
 
   if (word_boundary_file != "None"){

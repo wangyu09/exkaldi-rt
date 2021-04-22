@@ -21,39 +21,37 @@ import subprocess
 import numpy as np
 import sys
 import threading
-import multiprocessing
 import ctypes
 import time
 import random
 import datetime
 from collections import namedtuple
+import glob
 
-#from exkaldirt.version import version
-#from exkaldirt.utils import *
+from exkaldirt.version import version
+from exkaldirt.utils import *
 
-from version import version
-from utils import *
+#from version import version
+#from utils import *
 
 class Info:
   '''
   A object to define some parameters of ExKaldi-RT.
   '''
   def __init__(self):
-    self.__kaldi_existed = False
     self.__timeout = 1800
     self.__timescale = 0.01
     self.__max_socket_buffer_size = 10000
     # Check Kaldi root directory and ExKaldi-RT tool directory
-    self.__kaldi_root = self.__find_kaldi_root()
-    self.__cmdroot = None if self.__kaldi_root is None else os.path.join(self.__kaldi_root,"src","exkaldirtcbin")
+    self.__find_ctool_root()
     # Get the float floor
     self.__epsilon = self.__get_floot_floor()
 
-  def __find_kaldi_root(self):
+  def __find_ctool_root(self):
     '''Look for the ExKaldi-RT C++ command root path.'''
+    self.__kaldi_root = None
     if "KALDI_ROOT" in os.environ.keys():
-      KALDI_ROOT = os.environ["KALDI_ROOT"]
-      self.__kaldi_existed = True
+      self.__kaldi_root = os.environ["KALDI_ROOT"]
     else:
       cmd = "which copy-matrix"
       p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -65,20 +63,21 @@ class Info:
       else:
         out = out.decode().strip()
         # out is a string like "/yourhome/kaldi/src/bin/copy-matrix"
-        KALDI_ROOT = os.path.dirname( os.path.dirname( os.path.dirname(out)) )
-        self.__kaldi_existed = True
+        self.__kaldi_root = os.path.dirname( os.path.dirname( os.path.dirname(out)) )
 
-    if self.__kaldi_existed:
-      cmdroot = os.path.join(KALDI_ROOT,"src","exkaldirtcbin")
-      #print(cmdroot)
-      assert os.path.isfile(os.path.join(cmdroot,"exkaldi-online-decoder")), \
-            "ExKaldi-RT C++ source files have not been compiled sucessfully. " + \
-            "Please consult the Installation in github: https://github.com/wangyu09/exkaldi-rt ."
-      
-      return KALDI_ROOT
-
+    if self.__kaldi_root is None:
+      self.__cmdroot = None
     else:
-      return None
+      decoder = glob.glob( os.path.join(self.__kaldi_root,"src","exkaldirtcbin","exkaldi-online-decoder") )
+      tools = glob.glob( os.path.join(self.__kaldi_root,"src","exkaldirtcbin","cutils.*.so") )
+      if len(decoder) == 0 or len(tools) == 0:
+        print("Warning: ExKaldi-RT C++ source files have not been compiled sucessfully. " + \
+              "Please consult the Installation in github: https://github.com/wangyu09/exkaldi-rt ." + \
+              "Otherwise, the exkaldi.feature and exkaldi.decode modules are not available."
+            )
+        self.__cmdroot = None
+      else:
+        self.__cmdroot = os.path.join(self.__kaldi_root,"src","exkaldirtcbin")
 
   def __get_floot_floor(self):
     '''Get the floot floor value.'''
@@ -86,17 +85,12 @@ class Info:
       return 1.19209e-07
     else:
       sys.path.append( self.__cmdroot )
-      print( "here:", self.__cmdroot )
       try:
         import cutils
       except ModuleNotFoundError:
-        raise Exception("ExKaldi-RT C++ source files have not been compiled sucessfully. " + \
-            "Please consult the Installation in github: https://github.com/wangyu09/exkaldi-rt .")
+        raise Exception("ExKaldi-RT Pybind library have not been compiled sucessfully. " + \
+                        "Please consult the Installation in github: https://github.com/wangyu09/exkaldi-rt .")
       return cutils.get_float_floor()
-
-  @property
-  def KALDI_EXISTED(self)->bool:
-    return self.__kaldi_existed
 
   @property
   def VERSION(self):
@@ -210,7 +204,7 @@ class Packet:
     # Set chunk id
     assert isinstance(cid,int) and cid >= 0
     self.__cid = cid
-    assert isinstance(idmaker,int) and idmaker >= 0
+    assert isinstance(idmaker,int)
     self.__idmaker = idmaker
 
   @property
@@ -261,32 +255,39 @@ class Packet:
     '''
     result = b""
     
+    #Encode class name
+    result += ( self.__class__.__name__.encode() + b" " )
+
     # Encode idmaker and fid
     result += uint_to_bytes(self.idmaker, length=4)
     result += uint_to_bytes(self.cid, length=4)
-    # Encode main key
-    result += (self.mainKey.encode() + b" ")
-    
-    # Encode data
-    for key,value in self.__data.items():
-      # Encode key
-      result += key.encode() + b" "
-      if isinstance( value,(np.signedinteger,np.floating) ):
-        bvalue = element_to_bytes( value )
-        flag = b"E"
-      elif isinstance(value,np.ndarray):
-        if len(value.shape) == 1:
-          bvalue = vector_to_bytes( value )
-          flag = b"V"
+
+    # If this is not an empty packet
+    if self.mainKey is not None:
+
+      # Encode main key
+      result += (self.mainKey.encode() + b" ")
+      
+      # Encode data
+      for key,value in self.__data.items():
+        # Encode key
+        result += key.encode() + b" "
+        if isinstance( value,(np.signedinteger,np.floating) ):
+          bvalue = element_to_bytes( value )
+          flag = b"E"
+        elif isinstance(value,np.ndarray):
+          if len(value.shape) == 1:
+            bvalue = vector_to_bytes( value )
+            flag = b"V"
+          else:
+            bvalue = matrix_to_bytes( value )
+            flag = b"M"
+        elif isinstance(value,str):
+          bvalue = value.encode()
+          flag = b"S"
         else:
-          bvalue = matrix_to_bytes( value )
-          flag = b"M"
-      elif isinstance(value,str):
-        bvalue = value.encode()
-        flag = b"S"
-      else:
-        raise Exception("Unsupported data type.")
-      result += ( flag + uint_to_bytes( len(bvalue),length=4 ) + bvalue )
+          raise Exception("Unsupported data type.")
+        result += ( flag + uint_to_bytes( len(bvalue),length=4 ) + bvalue )
   
     return result
 
@@ -296,36 +297,47 @@ class Packet:
     Generate a packet object.
     '''
     with BytesIO(bstr) as sp:
+      
+      # Read class name
+      className = read_string( sp )
+
       # Read chunk ID
       idmaker = uint_from_bytes( sp.read(4) )
       cid = uint_from_bytes( sp.read(4) )
       # Read main key
       mainKey = read_string( sp )
-      # Read data
-      result = {}
-      while True:
-        key = read_string(sp)
-        if key == "":
-          break
-        flag = sp.read(1).decode()
-        if flag == "E":
-          size = uint_from_bytes( sp.read(1) )
-          data = element_from_bytes( sp.read(size) )
-        elif flag == "V":
-          size = uint_from_bytes( sp.read(4) )
-          data = vector_from_bytes( sp.read(size) )
-        elif flag == "M":
-          size = uint_from_bytes( sp.read(4) )
-          data = matrix_from_bytes( sp.read(size) )
-        elif flag == "S":
-          size = uint_from_bytes( sp.read(4) )
-          data = sp.read(size).decode()
-        else:
-          raise Exception(f"Unknown flag: {flag}")
 
-        result[ key ] = data
-  
-    return Packet(result,cid=cid,idmaker=idmaker,mainKey=mainKey)
+      result = {}
+      # If this is not an empty packet
+      if mainKey != "":
+        # Read data
+        while True:
+          key = read_string(sp)
+          if key == "":
+            break
+          flag = sp.read(1).decode()
+          if flag == "E":
+            size = uint_from_bytes( sp.read(4) )
+            data = element_from_bytes( sp.read(size) )
+          elif flag == "V":
+            size = uint_from_bytes( sp.read(4) )
+            data = vector_from_bytes( sp.read(size) )
+          elif flag == "M":
+            size = uint_from_bytes( sp.read(4) )
+            data = matrix_from_bytes( sp.read(size) )
+          elif flag == "S":
+            size = uint_from_bytes( sp.read(4) )
+            data = sp.read(size).decode()
+          else:
+            raise Exception(f"Unknown flag: {flag}")
+
+          result[ key ] = data
+
+      # otherwise, this is an empty packet
+      else:
+        mainKey = None
+
+    return globals()[className](items=result,cid=cid,idmaker=idmaker,mainKey=mainKey)
   
   def keys(self):
     return self.__data.keys()
@@ -336,13 +348,15 @@ class Packet:
   def items(self):
     return self.__data.items()
 
+  def is_empty(self):
+    return len(self.keys()) == 0
+
 # ENDPOINT is a special packet.
 class Endpoint(Packet):
-  def __init__(self):
-    super().__init__({},0,0)
 
-ENDPOINT = Endpoint()
-
+  def __init__(self,cid,idmaker,items={},mainKey=None):
+    super().__init__(items,cid,idmaker,mainKey)
+  
 def is_endpoint(obj):
   '''
   If this is Endpoint, return True.
@@ -350,7 +364,7 @@ def is_endpoint(obj):
   return isinstance(obj, Endpoint)
 
 # Standerd output lock
-stdout_lock = multiprocessing.Lock()
+stdout_lock = threading.Lock()
 
 def print_(*args,**kwargs):
   with stdout_lock:
@@ -377,47 +391,49 @@ class PIPE(ExKaldiRTBase):
     # Initilize state and name
     super().__init__(name=name)
     # Set a cache to pass data
-    self.__cache = multiprocessing.Queue()
-    # Flags used to communicate between diffrent components (with mutiple processes)
-    self.__state = cState(mark.silent)
-    self.__inlocked = cBool(False)
-    self.__outlocked = cBool(False)
-    self.__last_added_endpoint = cBool(False)
-    self.__firstPut = cDouble(0.0)
-    self.__lastPut = cDouble(0.0)
-    self.__firstGet = cDouble(0.0)
-    self.__lastGet = cDouble(0.0)
-    self.__time_stamp = cDouble( time.time() )
+    self.__cache = queue.Queue()
+    self.__cacheSize = 0
+    # Flags used to communicate between different components
+    self.__state = mark.silent
+    self.__inlocked = False
+    self.__outlocked = False
+    self.__last_added_endpoint = False
+    self.__firstPut = 0.0
+    self.__lastPut = 0.0
+    self.__firstGet = 0.0
+    self.__lastGet = 0.0
+    self.__lastID = (-1,-1)
+    self.__time_stamp = time.time()
     # Password to access this PIPE
     self.__password = random.randint(0,100)
     # Class backs functions
     self.__callbacks = []
 
   def state_is_(self,*m) -> bool:
-    return self.__state.value in m
+    return self.__state in m
 
   def __shift_state_to_(self,m):
     assert m in mark
-    self.__state.value = m
-    self.__time_stamp.value = time.time()
+    self.__state = m
+    self.__time_stamp = time.time()
 
   @property
   def state(self):
-    return self.__state.value
+    return self.__state
 
   @property
   def timestamp(self):
-    return self.__time_stamp.value
+    return self.__time_stamp
 
   #############
   # Lock input or output port
   #############
 
   def is_inlocked(self)->bool:
-    return self.__inlocked.value
+    return self.__inlocked
   
   def is_outlocked(self)->bool:
-    return self.__outlocked.value
+    return self.__outlocked
 
   def lock_in(self)->int:
     '''
@@ -425,7 +441,7 @@ class PIPE(ExKaldiRTBase):
     '''
     if self.is_inlocked():
       return None
-    self.__inlocked.value = True
+    self.__inlocked = True
     return self.__password
   
   def lock_out(self)->int:
@@ -434,20 +450,20 @@ class PIPE(ExKaldiRTBase):
     '''
     if self.is_outlocked():
       return None
-    self.__outlocked.value = True
+    self.__outlocked = True
     return self.__password
 
   def release_in(self,password):
     if self.is_inlocked:
       if password == self.__password:
-        self.__inlocked.value = False
+        self.__inlocked = False
       else:
         print_(f"{self.name}: Wrong password to release input port!")
   
   def release_out(self,password):
     if self.is_outlocked:
       if password == self.__password:
-        self.__outlocked.value = False
+        self.__outlocked = False
       else:
         print_(f"{self.name}: Wrong password to release output port!")
 
@@ -458,9 +474,10 @@ class PIPE(ExKaldiRTBase):
   def clear(self):
     assert not self.state_is_(mark.active), f"{self.name}: Can not clear a active PIPE."
     # Clear
-    size = self.__cache.qsize()
-    for i in range(size):
-      self.__cache.get()
+    #size = self.size()
+    #for i in range(size):
+    #  self.__cache.get()
+    self.__cache.queue.clear()
   
   def reset(self):
     '''
@@ -482,12 +499,12 @@ class PIPE(ExKaldiRTBase):
     # Reset state
     self.__shift_state_to_(mark.silent)
     # A flag to remove continue ENDPOINT or head ENDPOINT 
-    self.__last_added_endpoint.value = False
+    self.__last_added_endpoint = False
     # flags to report time points
-    self.__firstPut.value = 0.0
-    self.__lastPut.value = 0.0
-    self.__firstGet.value = 0.0
-    self.__lastGet.value = 0.0
+    self.__firstPut = 0.0
+    self.__lastPut = 0.0
+    self.__firstGet = 0.0
+    self.__lastGet = 0.0
 
   def activate(self):
     '''
@@ -512,7 +529,10 @@ class PIPE(ExKaldiRTBase):
     if not self.state_is_(mark.terminated):
       assert self.state_is_(mark.active) or self.state_is_(mark.stranded)
       # Append a endpoint flag
-      self.put( ENDPOINT, password=self.__password )
+      if not self.__last_added_endpoint:
+        self.__cache.put( Endpoint(cid=self.__lastID[0]+1,idmaker=self.__lastID[1]) )
+        self.__cacheSize += 1
+        self.__last_added_endpoint = True
       # Shift state
       self.__shift_state_to_(mark.terminated)
   
@@ -525,13 +545,13 @@ class PIPE(ExKaldiRTBase):
     '''
     Get the size.
     '''
-    return self.__cache.qsize()
+    return self.__cacheSize
 
   def is_empty(self)->bool:
     '''
     If there is no any data in PIPE, return True.
     '''
-    return self.__cache.empty()
+    return self.__cacheSize == 0
 
   def get(self,password=None,timeout=info.TIMEOUT)->Packet:
     '''
@@ -556,13 +576,14 @@ class PIPE(ExKaldiRTBase):
     
     #print( "arrived here 2:",self.__cache.qsize() )
 
-    packet = self.__cache.get(timeout=0)
+    packet = self.__cache.get(timeout=timeout)
     # Record time stamp
-    if self.__firstGet.value == 0.0:
-      self.__firstGet.value = time.time()
-    self.__lastGet.value = time.time()
+    if self.__firstGet == 0.0:
+      self.__firstGet = datetime.datetime.now()
+    self.__lastGet = datetime.datetime.now()
     #print( "arrived here 3" )
     # Return
+    self.__cacheSize -= 1
     return packet
   
   def put(self,packet,password=None):
@@ -590,17 +611,23 @@ class PIPE(ExKaldiRTBase):
     assert isinstance(packet,Packet), f"{self.name}: Only Packet can be appended in PIPE."
     
     # record time stamp
-    if self.__firstPut.value == 0.0:
-      self.__firstPut.value = time.time()
-    self.__lastPut.value = time.time()
+    if self.__firstPut == 0.0:
+      self.__firstPut = datetime.datetime.now()
+    self.__lastPut = datetime.datetime.now()
     # remove endpoint continuous flags and call back 
     if is_endpoint(packet):
-      if not self.__last_added_endpoint.value:
+      if not self.__last_added_endpoint:
         self.__cache.put(packet)
-        self.__last_added_endpoint.value = True
+        self.__last_added_endpoint = True
+        self.__cacheSize += 1
+        self.__lastID = (packet.cid,packet.idmaker)
+      elif not packet.is_empty():
+        print_("Warning: An endpoint Packet has been discarded, even though it is not empty.")
     else:
       self.__cache.put(packet)
-      self.__last_added_endpoint.value = False
+      self.__cacheSize += 1
+      self.__last_added_endpoint = False
+      self.__lastID = (packet.cid,packet.idmaker)
       for func in self.__callbacks:
         func(packet)
     
@@ -624,10 +651,13 @@ class PIPE(ExKaldiRTBase):
     partial = []
     for i in range(size):
       packet = self.__cache.get()
-      if is_endpoint(packet) and len(partial) > 0:
-        result.append( partial )
-        partial = []
-      else:
+      if is_endpoint(packet):
+        if not packet.is_empty():
+          partial.append( mapFunc(packet) )
+        if len(partial) > 0:
+          result.append( partial )
+          partial = []
+      elif not packet.is_empty():
         partial.append( mapFunc(packet) )
     if len(partial)>0:
       result.append( partial )
@@ -641,7 +671,7 @@ class PIPE(ExKaldiRTBase):
     keys = ["name",]
     values = [self.name,]
     for name in ["firstPut","lastPut","firstGet","lastGet"]:
-      value = getattr(self, f"_{type(self).__name__}__{name}").value
+      value = getattr(self, f"_{type(self).__name__}__{name}")
       if value != 0.0:
         keys.append(name)
         values.append(value)
@@ -664,65 +694,45 @@ class NullPIPE(PIPE):
   def __init__(self,name=None):
     super().__init__(name=name)
 
-  def put(self,packet,password=None):
+  def clear(self):
     return None
+    
+  def reset(self):
+    if self.state_is_(mark.silent):
+      return None
 
-  def get(self,password=None,timeout=info.TIMEOUT):
-    return None
+    assert not (self.state_is_(mark.active) or self.state_is_(mark.stranded)), \
+          f"{self.name}: Can not reset a active or stranded PIPE."
+    # Reset state
+    self.__shift_state_to_(mark.silent)
+    # A flag to remove continue ENDPOINT or head ENDPOINT 
+  
+  def size(self):
+    return 0
+
+  def is_empty(self)->bool:
+    return True
+
+  def get(self,password=None,timeout=info.TIMEOUT)->Packet:
+    raise Exception("Null PIPE can not return packet.")
+  
+  def put(self,packet,password=None):
+    raise Exception("Null PIPE can not storage packet.")
+  
+  def to_list(self,mapFunc=None)->list:
+    raise Exception("Null PIPE can not convert to list.")
+
+  def report_time(self):
+    raise Exception("Null PIPE can not report time info.")
+
+  def callback(self,func):
+    raise Exception("Null PIPE can not add callback functions.")
 
 def is_nullpipe(pipe):
   '''
   If this is Endpoint, return True.
   '''
   return isinstance(pipe,NullPIPE)
-
-class Tunnel(ExKaldiRTBase):
-
-  def __init__(self,name=None):
-    super().__init__(name=name)
-    self.__tunnel = multiprocessing.Queue()
-    # Password to access this PIPE
-    self.__password = random.randint(0,100)
-    self.__locked = cBool(False)
-  
-  def lock(self):
-    if self.is_locked():
-      return None
-    else:
-      self.__locked.value = True
-      return self.__password
-  
-  def is_locked(self):
-    return self.__locked.value
-
-  def size(self):
-    return self.__tunnel.qsize()
-
-  def release(self,password):
-    if self.is_locked():
-      if password != self.__password:
-        print_( f"{self.name}: Wrong password. Failed to release.")
-      else:
-        self.__locked.value = False
-
-  def put(self,obj,password=None):
-    # If input port is locked
-    if self.is_locked():
-      if password is None:
-        raise Exception(f"{self.name}: Tunnel is clocked. Unlock or give the password to access it.")
-      elif password != self.__password:
-        raise Exception(f"{self.name}: Wrong password to access the Tunnel.")
-    self.__tunnel.put(obj)
-
-  def get(self,password=None,timeout=info.TIMEOUT):
-
-    if self.is_locked():
-      if password is None:
-        raise Exception(f"{self.name}: Tunnel is clocked. Unlock or give the password to access it.")
-      elif password != self.__password:
-        raise Exception(f"{self.name}: Wrong password to access the Tunnel.")
-    
-    return self.__tunnel.get(timeout=timeout)
 
 class Component(ExKaldiRTBase):
   '''
@@ -739,12 +749,12 @@ class Component(ExKaldiRTBase):
     self.__outPIPE = PIPE(name=f"The output PIPE of "+self.name)
     self.__outPassword = self.__outPIPE.lock_in() # Lock the in-port of output PIPE
     # Each component has a core process to run a function to handle packets.
-    self.__coreProcess = None
+    self.__coreThread = None
     # If need to redirect the input PIPE
     # We will stop the core process firstly and then link a new input PIPE and restart core process.
-    self.__redirect_flag = cBool(False)
+    self.__redirect_flag = False
     # process over flag
-    self.__core_process_over = cBool(False)
+    self.__core_thread_over = False
     # The key
     if isinstance(oKey,str):
       self.__oKey = (oKey,)
@@ -767,24 +777,24 @@ class Component(ExKaldiRTBase):
     '''
     Clear and reset Component.
     '''
-    if self.coreProcess is None:
+    if self.coreThread is None:
       return None
-    elif self.coreProcess.is_alive():
+    elif self.coreThread.is_alive():
       raise Exception(f"{self.name}: Component is active and can not reset. Please stop it firstly.")
     else:
-      self.__coreProcess = None
+      self.__coreThread = None
       self.__outPIPE.reset()
       if not self.__inPIPE.state_is_(mark.silent):
         self.__inPIPE.reset()
-      self.__core_process_over.value = False
-      self.__redirect_flag.value = False
+      self.__core_thread_over = False
+      self.__redirect_flag = False
 
   @property
-  def coreProcess(self)->multiprocessing.Process:
+  def coreThread(self)->threading.Thread:
     '''
     Get the core process.
     '''
-    return self.__coreProcess
+    return self.__coreThread
 
   @property
   def inPIPE(self)->PIPE:
@@ -802,8 +812,8 @@ class Component(ExKaldiRTBase):
       self.__iKey = iKey
 
     # Release
-    if self.__inPIPE is not None:
-      assert not self.coreProcess.is_alive(), f"{self.name}: Can not redirect a new input PIPE when the component is running."
+    if self.coreThread is not None:
+      assert not self.coreThread.is_alive(), f"{self.name}: Can not redirect a new input PIPE when the component is running."
       if inPIPE == inPIPE:
         return None
       # Release the original input PIPE
@@ -819,7 +829,7 @@ class Component(ExKaldiRTBase):
     Start running a process to handle Packets in inPIPE.
     '''
     # If this is a silent component
-    if self.coreProcess is None:
+    if self.coreThread is None:
       if inPIPE is None:
         if self.__inPIPE is None:
           raise Exception(f"{self.name}: Please give the input PIPE.")
@@ -835,12 +845,10 @@ class Component(ExKaldiRTBase):
       if inPIPE.state_is_(mark.silent):
         inPIPE.activate()
       # Run core process
-      self.__coreProcess = multiprocessing.Process(target=self.__core_process_loop_wrapper)
-      self.__coreProcess.daemon = True
-      self.__coreProcess.start()
+      self.__coreThread = self._create_thread(func=self.__core_thread_loop_wrapper)
 
     # If this is not silent component
-    elif self.coreProcess.is_alive():
+    elif self.coreThread.is_alive():
       # If this component is stranded
       if self.__outPIPE.state_is_(mark.stranded):
         ## If do not need to redirect
@@ -850,9 +858,9 @@ class Component(ExKaldiRTBase):
         ## If need to redirect input PIPE
         else:
           # Close the core process
-          self.__redirect_flag.value = True
+          self.__redirect_flag = True
           self.wait()
-          self.__redirect_flag.value = False
+          self.__redirect_flag = False
           # Link the new input PIPE
           self.link(inPIPE,iKey)
           # Activate
@@ -861,20 +869,26 @@ class Component(ExKaldiRTBase):
           if inPIPE.state_is_(mark.silent):
             inPIPE.activate()
           # Run core process
-          self.__coreProcess = multiprocessing.Process(target=self.__core_process_loop_wrapper)
-          self.__coreProcess.daemon = True
-          self.__coreProcess.start()
+          self.__coreThread = self._create_thread(func=self.__core_thread_loop_wrapper)
     
     else:
       raise Exception(f"{self.name}: Can only start a silent or restart a stranded Component.")
+
+  def _create_thread(self,func):
+    coreThread = threading.Thread(target=func)
+    coreThread.setDaemon(True)
+    coreThread.start()
+    return coreThread
 
   def decide_state(self):
     
     assert (not self.inPIPE.state_is_(mark.silent)) and  (not self.inPIPE.state_is_(mark.silent)), \
            "Can not decide state because input PIPE or outPIPE have not been activated."
 
+    #print("Start to decide....")
     # If input and output PIPE have the same state
     if self.inPIPE.state == self.outPIPE.state:
+      #print("Debug: 1")
       return mark.inPIPE, self.inPIPE.state
 
     # firstly check whether there is wrong state
@@ -882,10 +896,12 @@ class Component(ExKaldiRTBase):
     if self.inPIPE.state_is_(mark.wrong):
       if not self.outPIPE.state_is_(mark.terminated):
         self.outPIPE.kill()
+      #print("Debug: 2")
       return mark.inPIPE, mark.wrong
     elif self.outPIPE.state_is_(mark.wrong):
       if not self.inPIPE.state_is_(mark.terminated):
         self.inPIPE.kill()
+      #print("Debug: 3")
       return mark.outPIPE, mark.wrong
     
     else:
@@ -893,6 +909,7 @@ class Component(ExKaldiRTBase):
       # also terminate input PIPE instantly
       if self.outPIPE.state_is_(mark.terminated):
         self.inPIPE.stop()
+        #print("Debug: 4")
         return mark.outPIPE, mark.terminated
       else:
         #  in state might be: active, terminated, stranded 
@@ -902,22 +919,28 @@ class Component(ExKaldiRTBase):
           # the output state must be stranded
           if self.inPIPE.timestamp > self.outPIPE.timestamp:
             self.outPIPE.activate()
+            #print("Debug: 5")
             return mark.inPIPE, mark.active
           else:
             self.inPIPE.pause()
+            #print("Debug: 6")
             return mark.outPIPE, mark.stranded
         elif self.inPIPE.state_is_(mark.terminated):
           if self.outPIPE.state_is_(mark.active):
+            #print("Debug: 7")
             return mark.inPIPE, mark.terminated
           else:
+            #print("Debug: 8")
             return mark.outPIPE, mark.stranded
         else:
           # the output state must be active
           if self.inPIPE.timestamp > self.outPIPE.timestamp:
             self.outPIPE.pause()
+            #print("Debug: 9")
             return mark.inPIPE, mark.stranded
           else:
             self.inPIPE.activate()
+            #print("Debug: 10")
             return mark.outPIPE, mark.active
  
   def decide_action(self):
@@ -963,10 +986,10 @@ class Component(ExKaldiRTBase):
             return True
 
   def core_loop(self):
-    raise Exception(f"{self.name}: Please implement the ._main_process_function function.")
+    raise Exception(f"{self.name}: Please implement the core_loop function.")
 
-  def __core_process_loop_wrapper(self):
-    self.__core_process_over.value = False
+  def __core_thread_loop_wrapper(self):
+    self.__core_thread_over = False
     print_(f"{self.name}: Start...")
     try:
       self.core_loop()
@@ -983,7 +1006,7 @@ class Component(ExKaldiRTBase):
         self.outPIPE.stop()
     finally:
       print_(f"{self.name}: Stop!")
-      self.__core_process_over.value = True
+      self.__core_thread_over = True
 
   def stop(self):
     '''
@@ -1018,14 +1041,14 @@ class Component(ExKaldiRTBase):
     '''
     Wait until the core thread is finished
     '''
-    if self.__coreProcess is None:
+    if self.__coreThread is None:
       raise Exception(f"{self.name}: Component has not been started.")
     else:
-      # self.__coreProcess.join()
-      while not self.__core_process_over.value:
-        time.sleep(info.TIMESCALE)
-      self.__coreProcess.terminate()
-      self.__coreProcess.join()
+      self.__coreThread.join()
+      #while not self.__core_thread_over:
+      #  time.sleep(info.TIMESCALE)
+      #self.__coreThread.terminate()
+      #self.__coreThread.join()
 
   def get_packet(self):
     '''
@@ -1176,7 +1199,7 @@ class Chain(ExKaldiRTBase):
         ID = self.__name2id[name]
         return self.__chain[ID]
       else:
-        for basename,ID in self.__name2id.values():
+        for basename,ID in self.__name2ids():
           if basename == name:
             return self.__chain[ID]
         raise Exception(f"{self.name}: No such Node: {name}")
@@ -1198,8 +1221,11 @@ class Chain(ExKaldiRTBase):
     assert len(self.__chain) > 0
     # Stop 
     for pipe in self.__inPIPE_Pool:
-      if pipe.state_is_(mark.active,mark.stranded):
-        pipe.stop()
+      #print("here 1",pipe.state)
+      pipe.stop()
+      #if pipe.state_is_(mark.active,mark.stranded):
+      #  print("here 2")
+      #  pipe.stop()
   
   def kill(self):
     assert len(self.__chain) > 0
@@ -1264,12 +1290,12 @@ class Joint(ExKaldiRTBase):
       self.__outPIPE_Pool.append( PIPE( name=f"{i}th output PIPE of "+self.basename ) )
       self.__outPassword_Pool.append( self.__outPIPE_Pool[i].lock_in() )  # Lock the in-port of output PIPE
     # Each joint has a core process to run a function to handle packets.
-    self.__coreProcess = None
+    self.__coreThread = None
     # If need to redirect the input PIPE
     # We will stop the core process firstly and then link a new input PIPE and restart core process.
-    self.__redirect_flag = cBool(False)
+    self.__redirect_flag = False
     # process over flag. used to terminate core process forcely
-    self.__core_process_over = cBool(False)
+    self.__core_thread_over = False
     # define a joint function
     assert callable(jointFunc)
     self.__joint_function = jointFunc
@@ -1286,22 +1312,22 @@ class Joint(ExKaldiRTBase):
     '''
     Clear and reset joint.
     '''
-    if self.coreProcess is None:
+    if self.coreThread is None:
       return None
-    elif self.coreProcess.is_alive():
+    elif self.coreThread.is_alive():
       raise Exception(f"{self.name}: Component is active and can not reset. Please stop it firstly.")
     else:
-      self.__coreProcess = None
+      self.__coreThread = None
       for pipe in self.__outPIPE_Pool:
         pipe.reset()
-      self.__core_process_over.value = False
+      self.__core_thread_over = False
 
   @property
-  def coreProcess(self)->multiprocessing.Process:
+  def coreThread(self)->threading.Thread:
     '''
     Get the core process.
     '''
-    return self.__coreProcess
+    return self.__coreThread
 
   @property
   def inPIPE(self)->list:
@@ -1316,12 +1342,12 @@ class Joint(ExKaldiRTBase):
     Add a new inPIPE into input PIPE pool.
     Or replace the input PIPE pool with a list of PIPEs.
     '''
-    if self.coreProcess is not None:
-      assert not self.coreProcess.is_alive(), f"{self.name}: Can not redirect a new input PIPE when the joint is running."
+    if self.coreThread is not None:
+      assert not self.coreThread.is_alive(), f"{self.name}: Can not redirect a new input PIPE when the joint is running."
     
     # 1. If this is a list/tuple of PIPEs
     if isinstance(inPIPE, (list,tuple)):
-      inPIPE = list(set(inPIPE))
+      assert len(set(inPIPE)) == len(inPIPE)
       # 1.1 release the input PIPEs in Pool
       for i in range(self.__inNums):
         self.__inPIPE_Pool[i].release_out(password=self.__inPassword_Pool[i])
@@ -1347,7 +1373,7 @@ class Joint(ExKaldiRTBase):
     Start running a process to handle Packets in inPIPE.
     '''
     # 1. If this is a silent joint
-    if self.coreProcess is None:
+    if self.coreThread is None:
       if inPIPE is None:
         assert self.__inNums > 0, f"{self.name}: No input PIPEs avaliable."
       else:
@@ -1361,12 +1387,10 @@ class Joint(ExKaldiRTBase):
         if pipe.state_is_(mark.silent):
           pipe.activate()
       # Run core process
-      self.__coreProcess = multiprocessing.Process(target=self.__core_process_loop_wrapper)
-      self.__coreProcess.daemon = True
-      self.__coreProcess.start()
+      self.__coreThread = self._create_thread(self.__core_thread_loop_wrapper)
 
     # 2. If this is not silent component
-    elif self.coreProcess.is_alive():
+    elif self.coreThread.is_alive():
       # 2.1 If this joint is stranded
       if self.__outPIPE_Pool[0].state_is_(mark.stranded):
         ## Check whether it is necessary to redirect
@@ -1393,9 +1417,9 @@ class Joint(ExKaldiRTBase):
         ## If need to redirect input PIPE
         else:
           # Close the core process
-          self.__redirect_flag.value = True
+          self.__redirect_flag = True
           self.wait()
-          self.__redirect_flag.value = False
+          self.__redirect_flag = False
           # Link the new input PIPE
           self.link( inPIPE )
           # Activate
@@ -1406,12 +1430,16 @@ class Joint(ExKaldiRTBase):
             if pipe.state_is_(mark.silent):
               pipe.activate()
           # Run core process
-          self.__coreProcess = multiprocessing.Process(target=self.__core_process_loop_wrapper)
-          self.__coreProcess.daemon = True
-          self.__coreProcess.start()
+          self.__coreThread = self._create_thread(self.__core_thread_loop_wrapper)
 
     else:
       raise Exception(f"{self.name}: Can only start a silent or restart a stranded Component.")
+
+  def _create_thread(self,func):
+    coreThread = threading.Thread(target=func)
+    coreThread.setDaemon(True)
+    coreThread.start()
+    return coreThread
 
   def decide_state(self):
 
@@ -1487,8 +1515,8 @@ class Joint(ExKaldiRTBase):
             else:
               return None, mark.active
 
-  def __core_process_loop_wrapper(self):
-    self.__core_process_over.value = False
+  def __core_thread_loop_wrapper(self):
+    self.__core_thread_over = False
     print_(f"{self.name}: Start...")
     try:
       self.core_loop()
@@ -1503,7 +1531,7 @@ class Joint(ExKaldiRTBase):
           pipe.stop()
     finally:
       print_(f"{self.name}: Stop!")
-      self.__core_process_over.value = True
+      self.__core_thread_over = True
 
   def core_loop(self):
 
@@ -1532,7 +1560,7 @@ class Joint(ExKaldiRTBase):
       elif state == mark.stranded:
         # If joint is stranded, wait (or terminate)
         time.sleep( info.TIMESCALE )
-        if self.__redirect_flag.value == True:
+        if self.__redirect_flag == True:
           break
         continue
       else:
@@ -1594,38 +1622,29 @@ class Joint(ExKaldiRTBase):
 
       ## If buffer has been filled fully
       else:
-        ### If all packets are ENDPOINTs
-        # numsEndpoint = buffer.count( ENDPOINT )
-        numsEndpoint = sum( [ int(is_endpoint(pack)) for pack in buffer ] )
-
-        if numsEndpoint == self.__inNums:
-          #### Add endpoint to all output PIPEs and clear buffer
-          for i in range( self.__outNums ):
-            self.put_packet( i, ENDPOINT )
-          for i in range( self.__inNums ):
+        #### Match the chunk id
+        cids = [ x.cid for x in buffer ]
+        maxcid = max( cids )
+        for i,pack in enumerate(buffer):
+          if pack.cid != maxcid:
             buffer[i] = None
-        ### If ENDPOINTs existed but not filled fully
-        ### We will remove Endpoints
-        elif numsEndpoint > 0:
-          #### Clear ENDPOINTs 
-          for i in range( self.__inNums ):
-            if is_endpoint( buffer[i] ):
-              buffer[i] = None
-          #### try to fill again
+        ##### If chunk ids does not match, only keep the latest packets
+        ##### Remove mismatch packets and try fill again
+        if None in buffer:
           continue
-        ### If no ENDPOINT flags
+        ##### If chunk ids matched
         else:
-          #### Match the chunk id
-          cids = [ x.cid for x in buffer ]
-          maxcid = max( cids )
-          for i,pack in enumerate(buffer):
-            if pack.cid != maxcid:
-              buffer[i] = None
-          ##### If chunk ids does not match, only keep the latest packets
-          ##### Remove mismatch packets and try fill again
-          if None in buffer:
-            continue
-          ##### If chunk ids matched
+          ### If all packets are empty (Especially when they are the endpoint, the possibility is very high).
+          numsEndpoint = sum( [ int(is_endpoint(pack)) for pack in buffer ] )
+          assert numsEndpoint == 0 or numsEndpoint == self.__inNums
+          numsEmpty = sum( [ int(pack.is_empty()) for pack in buffer ] )
+          if numsEmpty == self.__inNums:
+            if is_endpoint(buffer[0]):
+              for i in range( self.__outNums ):
+                self.put_packet( i, Endpoint(cid=maxcid,idmaker=idmaker) )
+            else:
+              for i in range( self.__outNums ):
+                self.put_packet( i, Packet(items={},cid=maxcid,idmaker=idmaker) )
           else:
             ###### Do joint operation according to specified rules.
             inputs = [ dict(pack.items()) for pack in buffer ]
@@ -1634,13 +1653,17 @@ class Joint(ExKaldiRTBase):
             if isinstance(outputs,dict):
               outputs = [ outputs, ]
             else:
-              assert isinstance(outputs, (tuple,list))
+              assert isinstance(outputs,(tuple,list))
               for output in outputs:
                 assert isinstance(output,dict)
             assert len(outputs) == self.__outNums
             ###### Append results into output PIPEs
-            for i in range(self.__outNums):
-              self.put_packet( i, Packet( outputs[i], cid=maxcid, idmaker=idmaker) )
+            if is_endpoint(buffer[0]):
+              for i in range(self.__outNums):
+                self.put_packet( i, Endpoint( items=outputs[i], cid=maxcid, idmaker=idmaker) )
+            else:
+              for i in range(self.__outNums):
+                self.put_packet( i, Packet( items=outputs[i], cid=maxcid, idmaker=idmaker) )
             ###### clear buffer and fill again
             for i in range(self.__inNums):
               buffer[i] = None
@@ -1680,13 +1703,13 @@ class Joint(ExKaldiRTBase):
     '''
     Wait until the core thread is finished.
     '''
-    if self.__coreProcess is None:
+    if self.__coreThread is None:
       raise Exception(f"{self.name}: Component has not been started.")
     else:
-      # self.__coreProcess.join()
-      while not self.__core_process_over.value:
-        time.sleep(info.TIMESCALE)
-      self.__coreProcess.terminate()
+      self.__coreThread.join()
+      #while not self.__core_thread_over:
+      #  time.sleep(info.TIMESCALE)
+      #self.__coreThread.terminate()
 
   def get_packet(self,inID):
     '''
@@ -1749,10 +1772,13 @@ def dynamic_display(pipe,mapFunc=None):
         packet = pipe.get()
     
     if is_endpoint( packet ):
+      if not packet.is_empty():
+        print_()
+        mapFunc( packet )
       print_(f"----- Endpoint -----")
       continue
     else:
-      print()
+      print_()
       mapFunc( packet )
 
   lastState = "terminated" if pipe.state_is_(mark.terminated) else "wrong"

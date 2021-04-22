@@ -27,15 +27,15 @@ import numpy as np
 import subprocess
 from collections import namedtuple
 
-#from exkaldirt.base import ExKaldiRTBase, Component, PIPE, Tunnel, Packet
-#from exkaldirt.utils import run_exkaldi_shell_command
-#from exkaldirt.base import info
-#from exkaldirt.base import ENDPOINT, is_endpoint, NullPIPE
+from exkaldirt.base import ExKaldiRTBase, Component, PIPE, Packet, ContextManager
+from exkaldirt.utils import run_exkaldi_shell_command
+from exkaldirt.base import info, mark, print_
+from exkaldirt.base import Endpoint, is_endpoint, NullPIPE
 
-from base import ExKaldiRTBase, Component, PIPE, Tunnel, Packet, ContextManager
-from utils import run_exkaldi_shell_command
-from base import info, mark, print_
-from base import ENDPOINT, is_endpoint, NullPIPE
+#from base import ExKaldiRTBase, Component, PIPE, Packet, ContextManager
+#from utils import run_exkaldi_shell_command
+#from base import info, mark, print_
+#from base import Endpoint, is_endpoint, NullPIPE
 
 def record(seconds=0,fileName=None):
   '''
@@ -308,6 +308,8 @@ class StreamReader(Component):
     self.__timeSpan = self.__points/self.__rate
     # A flag to set sampling id
     self.__id_counter = 0
+    #
+    self.link( NullPIPE() )
   
   @property
   def __id_count(self):
@@ -371,14 +373,10 @@ class StreamReader(Component):
     super().link( inPIPE=inPIPE )
 
   def start(self,inPIPE=None,iKey=None):
-    if inPIPE is None:
+    if inPIPE is None and self.inPIPE is None:
       inPIPE = NullPIPE()
     super().start( inPIPE=inPIPE )
   
-  ######################################
-  # These functions are working on subprocess scope
-  ######################################
-
   def core_loop(self):
     '''
     The thread function to record stream from microphone.
@@ -392,19 +390,15 @@ class StreamReader(Component):
         # Decide state
         master, state = self.decide_state()
         # If state is silent (although unlikely) 
-        if state == mark.silent:
-          self.inPIPE.activate()
-          self.outPIPE.activate()
-        elif state == mark.active:
-          pass
-        elif state in [mark.wrong,mark.terminated]:
+        if state in [mark.wrong,mark.terminated]:
           break
-        else:
+        elif state == mark.stranded:
           time.sleep( info.TIMESCALE )
-          if self.__redirect_flag.value:
+          if self.__redirect_flag:
             break
           continue
         #
+        #print( "try to read stream" )
         st = time.time()
         # read a chunk of stream
         data = wf.readframes(self.__points)
@@ -421,12 +415,11 @@ class StreamReader(Component):
           for ele in np.frombuffer(data,dtype=self.__format):
             self.put_packet( Packet( items={self.oKey[0]:ele},cid=self.__id_count,idmaker=self.objid ) )
         elif valid is None:
-          self.put_packet( ENDPOINT )
-
+          self.put_packet( Endpoint( cid=self.__id_count,idmaker=self.objid ) )
         ## if reader has been stopped by force
         if state == mark.terminated:
           break
-
+        #print( "sleep" )
         # wait if necessary
         if self.__simulate:
           internal = self.__timeSpan - round( (time.time()-st),4)
@@ -434,9 +427,124 @@ class StreamReader(Component):
             time.sleep( internal )
         
         i += 1
-        #print("Here:",i)
     finally:
       wf.close()
+
+class StreamRecorder(Component):
+  '''
+  Record real-time audio stream from wave file.
+  In current version, the format is restricted: [ sampling rate = 16KHz, data type = int16, channels = 1 ].
+  '''
+  def __init__(self,chunkSize=480,vaDetector=None,oKey="data",name=None):
+    '''
+    Args:
+      _waveFile_: (str) A wave file path.
+      _chunkSize_: (int) How many sampling points of each reading. 
+      _simulate_: (bool) If True, simulate actual clock.
+      _vaDetector_: (VADetector) A VADetector object to detect the stream.
+      _name_: (str) Name.
+    '''
+    super().__init__(oKey=oKey,name=name)
+    # Config chunk size
+    assert isinstance(chunkSize,int) and chunkSize > 0
+    self.__points = chunkSize
+    # Config VAD
+    self.__vad = None
+    if vaDetector is not None:
+      assert isinstance(vaDetector,VADetector), f"{self.name}: <vaDetector> should be a VADetector object."
+      if isinstance(vaDetector,WebrtcVADetector):
+        assert self.__points in [160,320,480], f"{self.name}: If use webrtcvad, please set the chunk size: 160, 320,or 480."
+      self.__vad = vaDetector
+    # Config audio information
+    self.__audio_info = self.__config_format(Rate=16000,Channels=1,Width=2)
+    # A flag to set sampling id
+    self.__id_counter = 0
+    #
+    self.link( NullPIPE() )
+  
+  @property
+  def __id_count(self):
+    self.__id_counter += 1
+    return self.__id_counter - 1
+
+  def __config_format(self,Rate,Channels,Width):
+    '''
+    Set wave parameters.
+    '''
+    assert Width in [2,4]
+
+    self.__rate = Rate
+    self.__channels = Channels
+    self.__width = Width
+
+    if Width == 2:
+      self.__paFormat = pyaudio.paInt16
+      self.__format = "int16"
+    else:
+      self.__paFormat = pyaudio.paInt32
+      self.__format = "int32"
+    
+    return namedtuple("AudioInfo",["rate","channels","width",])(
+                                    Rate,Channels,Width)
+  
+  def get_audio_info(self):
+    '''
+    Return the audio information.
+    '''
+    return self.__audio_info 
+
+  def link(self,inPIPE=None,iKey=None):
+    if inPIPE is None:
+      inPIPE = NullPIPE()
+    super().link( inPIPE=inPIPE )
+
+  def start(self,inPIPE=None,iKey=None):
+    if inPIPE is None and self.inPIPE is None:
+      inPIPE = NullPIPE()
+    super().start( inPIPE=inPIPE )
+  
+  def core_loop(self):
+    '''
+    The thread function to record stream from microphone.
+    '''
+    pa = pyaudio.PyAudio()
+    stream = pa.open(format=self.__paFormat,channels=self.__channels,
+                     rate=self.__rate,input=True,output=False)
+    try:
+      while True:
+        # 
+        master, state = self.decide_state()
+        #
+        if state in [mark.wrong,mark.terminated]:
+          break
+        elif state == mark.stranded:
+          time.sleep( info.TIMESCALE )
+          if self.__redirect_flag:
+            break
+          continue
+        
+        data = stream.read(self.__points)
+        # detcet if necessary
+        if self.__vad is not None:
+          valid = self.__vad.detect(data)
+        else:
+          valid = True
+        # add data
+        if valid is True:
+          ## append data
+          for ele in np.frombuffer(data,dtype=self.__format):
+            self.put_packet( Packet( items={self.oKey[0]:ele},cid=self.__id_count,idmaker=self.objid ) )
+        elif valid is None:
+          self.put_packet( Endpoint( cid=self.__id_count,idmaker=self.objid ) )
+
+        ## if reader has been stopped by force
+        if state == mark.terminated:
+          break
+      
+    finally:
+      stream.stop_stream()
+      stream.close()
+      pa.terminate()
 
 class ElementFrameCutter(Component):
   '''
@@ -498,11 +606,10 @@ class ElementFrameCutter(Component):
           self.put_packet( Packet( items={self.oKey[0]:self.__streamBuffer.copy()}, cid=self.__id_count, idmaker=self.objid ) )
       ## check whether arrived endpoint
       if self.__endpointStep:
-        self.put_packet( ENDPOINT )
+        self.put_packet( Endpoint( cid=self.__id_count,idmaker=self.objid ) )
         self.__reset_position_flag()
       ## check whether end
       if self.__finalStep:
-        self.outPIPE.stop()
         break
 
   def __reset_position_flag(self):
@@ -540,10 +647,7 @@ class ElementFrameCutter(Component):
         # 
         if action is True:
           pack = self.get_packet()
-          if is_endpoint(pack):
-            self.__endpointStep = True
-            break
-          else:
+          if not pack.is_empty():
             iKey = pack.mainKey if self.iKey is None else self.iKey
             ele = pack[ iKey ]
             assert isinstance(ele, (np.signedinteger,np.floating))
@@ -552,6 +656,9 @@ class ElementFrameCutter(Component):
             self.__streamBuffer[i,pos] = ele
             self.__hadData = True
             pos += 1
+          if is_endpoint(pack):    
+            self.__endpointStep = True
+            break
         elif action is None:
           self.__finalStep = True
           break
@@ -611,11 +718,10 @@ class VectorBatcher(Component):
         self.put_packet( Packet( items={self.oKey[0]:self.__streamBuffer.copy()}, cid=self.__id_count, idmaker=self.objid ) )
       ## check whether arrived endpoint
       if self.__endpointStep:
-        self.put_packet( ENDPOINT )
+        self.put_packet( Endpoint( cid=self.__id_count,idmaker=self.objid ) )
         self.__reset_position_flag()
       ## check whether end
       if self.__finalStep:
-        self.outPIPE.stop()
         break
 
   def __reset_position_flag(self):
@@ -650,10 +756,7 @@ class VectorBatcher(Component):
       action = self.decide_action()
       if action is True:
         pack = self.get_packet()
-        if is_endpoint(pack):
-          self.__endpointStep = True
-          break
-        else:
+        if not pack.is_empty():
           iKey = pack.mainKey if self.iKey is None else self.iKey
           vec = pack[ iKey ]
           assert isinstance(vec, np.ndarray) and len(vec.shape) == 1
@@ -663,6 +766,9 @@ class VectorBatcher(Component):
           self.__streamBuffer[pos] = vec
           self.__hadData = True
           pos += 1
+        if is_endpoint(pack):
+          self.__endpointStep = True
+          break
       elif action is False:
         return False
       else:
@@ -674,6 +780,45 @@ class VectorBatcher(Component):
       self.__streamBuffer[pos:] = 0
 
     return True   
+
+class MatrixSubsetter(Component):
+
+  def __init__(self,nChunk=2,oKey="data",name=None):
+    super().__init__(oKey=oKey,name=name)
+    assert isinstance(nChunk,int) and nChunk > 1
+    self.__nChunk = nChunk  
+  
+    self.__id_counter = 0
+
+  @property
+  def __id_count(self):
+    self.__id_counter += 1
+    return self.__id_counter - 1
+
+  def core_loop(self):
+    '''
+    The core thread funtion to batch.
+    '''
+    while True:
+      # Decide action
+      action = self.decide_action()
+      if action is True:
+        # get a packet
+        pack = self.get_packet()
+        if not pack.is_empty():
+          iKey = self.iKey if self.iKey is not None else pack.mainKey
+          mat = pack[iKey]
+          assert isinstance(mat,np.ndarray) and len(mat.shape) == 2
+          cSize = len(mat) // self.__nChunk
+          assert cSize * self.__nChunk == len(mat)
+          # Split matrix
+          for i in range(self.__nChunk):
+            self.put_packet( Packet(items={self.oKey[0]:mat[i*cSize:(i+1)*cSize]}, cid=self.__id_count, idmaker=pack.idmaker) )
+        # add endpoint
+        if is_endpoint(pack):
+          self.put_packet( Endpoint(cid=self.__id_count, idmaker=pack.idmaker) )
+      else:
+        break
 
 class VectorVADetector(Component):
   '''
@@ -758,7 +903,7 @@ class VectorVADetector(Component):
             for i in range(self.__tailIndex):
               self.put_packet( Packet({self.oKey[0]:self.__workBuffer[i].copy()},cid=self.__id_count,idmaker=self.objid) )
           elif (self.__silenceCounter == self.__patience) and self.__truncate:
-            self.put_packet( ENDPOINT )
+            self.put_packet( Endpoint(cid=self.__id_count,idmaker=self.objid) )
           else:
             pass
       ## if this is a list or tuple of bool value
@@ -774,16 +919,15 @@ class VectorVADetector(Component):
             if self.__silenceCounter < self.__patience:
               self.put_packet( Packet({self.oKey[0]:self.__workBuffer[i].copy()},cid=self.__id_count,idmaker=self.objid) )
             elif (self.__silenceCounter == self.__patience) and self.__truncate:
-              self.put_packet( ENDPOINT )
+              self.put_packet( Endpoint(cid=self.__id_count,idmaker=self.objid) )
       else:
         raise Exception(f"{self.name}: VAD function must return a bool value or a list of bool value.")
       # If arrived endpoint
       if self.__endpointStep:
-        self.put_packet( ENDPOINT )
+        self.put_packet( Endpoint(cid=self.__id_count,idmaker=self.objid) )
         self.__reset_position_flag()
       # If over
       if self.__finalStep:
-        self.outPIPE.stop()
         break
 
   def __prepare_chunk_frame(self):
@@ -791,15 +935,10 @@ class VectorVADetector(Component):
 
     pos = 0
     while pos < self.__batchSize:
-
       action = self.decide_action()
       if action is True:
         pack = self.get_packet()
-        if is_endpoint(pack):
-          self.__endpointStep = True
-          self.__tailIndex = pos
-          break
-        else:
+        if not pack.is_empty():
           iKey = pack.mainKey if self.iKey is None else self.iKey
           vec = pack[ iKey ]
           assert isinstance(vec, np.ndarray) and len(vec.shape) == 1
@@ -807,8 +946,11 @@ class VectorVADetector(Component):
             dim = len(vec)
             self.__workBuffer = np.zeros([self.__batchSize,dim,], dtype=vec.dtype)
           self.__workBuffer[pos] = vec
-          pos += 1
-
+          pos += 1  
+        if is_endpoint(pack):
+          self.__endpointStep = True
+          self.__tailIndex = pos
+          break
       elif action is None:
         self.__finalStep = True
         self.__tailIndex = pos

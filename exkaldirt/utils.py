@@ -1,8 +1,23 @@
 
+# coding=utf-8
+#
+# Yu Wang (University of Yamanashi)
+# Apr, 2021
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import numpy as np
 from _io import BytesIO 
-from multiprocessing import RawValue
-import ctypes
 import subprocess
 
 def uint_to_bytes(value,length=4):
@@ -10,6 +25,12 @@ def uint_to_bytes(value,length=4):
 
 def uint_from_bytes(value):
   return int.from_bytes(value,byteorder="little",signed=False)
+
+def double_to_bytes(value):
+  return np.float64(value).tobytes()
+
+def double_from_bytes(value):
+  return np.frombuffer(value, dtype="float64")[0]
 
 def dtype_to_bytes(dtype):
   if dtype.name[0] == "i":
@@ -71,22 +92,11 @@ def matrix_to_bytes(mat):
   return bdtype + uint_to_bytes(frames,length=4) + mat.tobytes()
 
 def matrix_from_bytes(mat):
+  assert isinstance(mat,bytes)
   dtype = dtype_from_bytes( mat[0:2] )
   frames = uint_from_bytes( mat[2:6] )
   data = np.frombuffer( mat[6:], dtype=dtype )
   return data.reshape( [frames,-1] )
-
-def cBool(value):
-  return RawValue(ctypes.c_bool,value)
-
-def cDouble(value):
-  return RawValue(ctypes.c_double, value)
-
-def cState(value):
-  return RawValue(ctypes.c_ushort,value)
-
-def cUint(value):
-  return RawValue(ctypes.c_uint,value)
 
 def encode_vector_temp(vec)->bytes:
   '''

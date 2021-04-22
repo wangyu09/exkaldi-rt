@@ -4,7 +4,8 @@ import numpy as np
 import math
 
 ######################################
-# Test Acoustic Estimator
+# exkaldirt.decode.AcousticEstimator
+# is used to compute observation probability using a DNN model
 ######################################
 
 def test_estimator():
@@ -36,12 +37,13 @@ def test_estimator():
 #test_estimator()
 
 ######################################
-# Test WFST Decoder
+# exkaldirt.decode.WfstDecoder
+# is used to decode based Kaldi HCLG decoding graph. 
 ######################################
 
 def test_decoder():
 
-  prob = np.load("../test/1272-135031-0000_mlp.npy")
+  prob = np.load("../examples/1272-135031-0000_mlp.npy")
 
   frames = prob.shape[0]
   dim = prob.shape[1]
@@ -58,6 +60,7 @@ def test_decoder():
     pipe.put( base.Packet( {"data":buffer[s:e]}, cid=i, idmaker=0 ) )
   
   pipe.stop()
+  print( pipe.size() )
   
   decoder = decode.WfstDecoder(
                       symbolTable="/Work18/wangyu/kaldi/egs/mini_librispeech/s5/exp/tri3b/graph_tgsmall/words.txt",
@@ -74,38 +77,16 @@ def test_decoder():
                     )
 
   decoder.start(inPIPE=pipe)
-  decoder.wait()
 
-  print( decoder.outPIPE.size() )
+  base.dynamic_display(decoder.outPIPE)
 
-  while not decoder.outPIPE.is_empty():
-    packet = decoder.outPIPE.get()
-    if base.is_endpoint(packet):
-      break
+  #decoder.wait()
 
-    print( dict(packet.items()) )
+  #print( decoder.outPIPE.size() )
+  #result = decode.dump_text_PIPE(decoder.outPIPE)
+  #print( result )
+  
+  # online : BECAUSE YOU ARE A SLEEPING IN SOME OF CONQUERING THE LOVELY RUSE PRINCES WAS PUT TO A FATAL WITHOUT A BULL OLD TORE SHAGGY SINCERE OR COOING DOVE
+  # offline: BECAUSE YOU ARE A SLEEPING IN SOME OF CONQUERING THE LOVELY RUSE PRINCES WAS PUT TO A FATAL WITHOUT A BULL OLD TORE SHAGGY SINCERE OR COOING DOVE
 
 #test_decoder()
-
-######################################
-# Test Fucntions
-######################################
-
-def test_fucntions():
-
-  pipe = base.PIPE()
-
-  for i in range(1,6):
-    pipe.put( base.Packet({"data":"A "*i}, cid=i, idmaker=0) )
-  
-  pipe.put( base.ENDPOINT )
-
-  for i in range(6,11):
-    pipe.put( base.Packet({"data":"B "*i}, cid=i, idmaker=0) )
-  
-  pipe.stop()
-
-  text = decode.dump_text_PIPE(pipe,endSymbol=" ")
-  print( text )
-
-test_fucntions()

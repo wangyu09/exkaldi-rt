@@ -15,11 +15,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#from exkaldirt.base import Component, Joint, ENDPOINT, PIPE
-#from exkaldirt.base import core_process_function, is_endpoint
-from base import Component, Joint, ENDPOINT, PIPE, Packet
-from base import is_endpoint
+from exkaldirt.base import Component, Joint, Endpoint, PIPE, Packet
+from exkaldirt.base import is_endpoint
 import copy
+
+#from base import Component, Joint, Endpoint, PIPE, Packet
+#from base import is_endpoint
+#import copy
 
 class Mapper(Component):
   '''
@@ -38,20 +40,20 @@ class Mapper(Component):
 
       action = self.decide_action()
 
-      if action is False:
-        break
-      elif action is None:
-        self.outPIPE.stop()
-        break
-      else:
+      if action is True:
         packet = self.get_packet()
-        if is_endpoint(packet):
-          self.put_packet( ENDPOINT )
-          continue
-        else:
+        if not packet.is_empty():
           items = dict( packet.items() )
           items = self.__map_function( items )
-          self.put_packet( Packet(items,cid=packet.cid,idmaker=packet.idmaker) )
+          if is_endpoint(packet):
+            packet = Endpoint(items=items,cid=packet.cid,idmaker=packet.idmaker)
+          else:
+            packet = Packet(items=items,cid=packet.cid,idmaker=packet.idmaker)
+          self.put_packet( packet )
+        elif is_endpoint(packet):
+          self.put_packet( packet )
+      else:
+        break
 
 class Spliter(Joint):
   '''
@@ -65,7 +67,7 @@ class Spliter(Joint):
   
   def __wrapped_function(self,items):
     assert len(items) == 1
-    return self.__func(items)
+    return self.__func(items[0])
 
 class Replicator(Joint):
   '''

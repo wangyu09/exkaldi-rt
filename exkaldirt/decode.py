@@ -22,17 +22,16 @@ import subprocess
 import os
 import queue
 
-#from exkaldirt.base import info 
-#from exkaldirt.base import Component, PIPE, Packet, ContextManager
-#from exkaldirt.utils import encode_vector_temp
-#from exkaldirt.feature import apply_floor
-#from exkaldirt.base import ENDPOINT, is_endpoint, print_
+from exkaldirt.base import info, mark, is_endpoint, print_
+from exkaldirt.base import Component, PIPE, Packet, ContextManager, Endpoint
+from exkaldirt.utils import encode_vector_temp
+from exkaldirt.feature import apply_floor
 
-from base import info, mark
-from base import Component, PIPE, Packet, ContextManager
-from utils import encode_vector_temp
-from feature import apply_floor
-from base import ENDPOINT, is_endpoint, print_
+#from base import info, mark
+#from base import Component, PIPE, Packet, ContextManager
+#from utils import encode_vector_temp
+#from feature import apply_floor
+#from base import Endpoint, is_endpoint, print_
 
 def softmax(data,axis=1):
   assert isinstance(data,np.ndarray)
@@ -121,55 +120,69 @@ class AcousticEstimator(Component):
   def core_loop(self):
     
     lastPacket = None
-    firstComputing = True
+    self.__firstComputing = True
     while True:
 
       action = self.decide_action()
+      #print( "debug action:", action )
 
-      if action is False:
-        break
-      elif action is None:
-        self.outPIPE.stop()
-        break
-      else:
+      if action is True:
         packet = self.get_packet()
 
-        if is_endpoint(packet):
-          self.put_packet( ENDPOINT )
-        else:
+        if not packet.is_empty():
           iKey = packet.mainKey if self.iKey is None else self.iKey
           mat = packet[iKey]
           if self.__context is not None:
-            mat = self.__context.wrap( mat )
-            if mat is None:
+            newMat = self.__context.wrap( mat )
+            if newMat is None:
               lastPacket = packet
-              continue
-            
-          probs = self.acoustic_function( mat )
-          assert isinstance(probs,np.ndarray) and len(probs.shape) == 2
-          if len(probs) != packet[iKey].shape[0] and firstComputing:
-            print_( f"Warning! {self.name}: The number of frames has changed. Please make sure this is indeed the result you want." )
-            firstComputing = False
-          # Post-process
-          ## Softmax
-          if self.__applySoftmax:
-            probs = softmax(probs,axis=1)
-          ## Log
-          if self.__applyLog:
-            probs = apply_floor(probs)
-            probs = np.log(probs)
-          ## Normalize with priors
-          if self.__priors:
-            assert probs.shape[-1] == len(self.__priors), "priors dimension does not match the output of acoustic function."
-            probs -= self.__priors
-
-          if lastPacket is None:
+            else:
+              probs = self.__compute_and_postprocess(newMat, mat.shape[0])
+              if lastPacket is None:
+                packet.add( self.oKey[0], probs, asMainKey=True )
+                self.put_packet( packet )
+              else:
+                lastPacket.add( self.oKey[0], probs, asMainKey=True )
+                self.put_packet( packet )
+                lastPacket = packet
+          else:
+            probs = self.__compute_and_postprocess(mat, mat.shape[0])
             packet.add( self.oKey[0], probs, asMainKey=True )
             self.put_packet( packet )
-          else:
+
+        if is_endpoint(packet):
+          if lastPacket is not None:
+            iKey = lastPacket.mainKey if self.iKey is None else self.iKey
+            mat = np.zeros_like(lastPacket[iKey])
+            newMat = self.__context.wrap( mat )
+            probs = self.__compute_and_postprocess(newMat, mat.shape[0])
             lastPacket.add( self.oKey[0], probs, asMainKey=True )
             self.put_packet( lastPacket )
-            lastPacket = packet
+          if packet.is_empty():
+            self.put_packet( packet )
+
+      else:
+        break
+
+  def __compute_and_postprocess(self,mat,frames):
+    probs = self.acoustic_function( mat )
+    assert isinstance(probs,np.ndarray) and len(probs.shape) == 2
+    if len(probs) != frames and self.__firstComputing:
+      print_( f"{self.name}: Warning! The number of frames has changed, {frames} -> {len(probs)}. Please make sure this is indeed the result you want." )
+      self.__firstComputing = False
+    # Post-process
+    ## Softmax
+    if self.__applySoftmax:
+      probs = softmax(probs,axis=1)
+    ## Log
+    if self.__applyLog:
+      probs = apply_floor(probs)
+      probs = np.log(probs)
+    ## Normalize with priors
+    if self.__priors:
+      assert probs.shape[-1] == len(self.__priors), "priors dimension does not match the output of acoustic function."
+      probs -= self.__priors
+    return probs
 
 class WfstDecoder(Component):
 
@@ -292,11 +305,8 @@ class WfstDecoder(Component):
             raise Exception(f"{self.name}: Timeout! Receiving thread has not received any data for a long time！")
 
         else:
-
           if line.startswith("-1"):
-            # pick out a cached picket
             packet = self.__packetCache.get()
-            # 
             line = line[2:].strip().split() # discard the flag "-1"
             if len(line) > 0:
               packet.add( self.oKey[0], self.ids_to_words(line), asMainKey=True )
@@ -306,43 +316,44 @@ class WfstDecoder(Component):
 
           ## Endpoint
           elif line.startswith("-2"): 
-            # pick out a cached picket
             packet = self.__packetCache.get()
-            #
-            lines = line[5:].strip().split("-1") # discard the flag "-2 -1"
-            lines = [ line.strip().split() for line in lines if len(line.strip()) > 0 ] 
-            if len(lines) == 0:
-              packet.add( self.oKey[0], " ", asMainKey=True )
-            elif len(lines) == 1:
-              packet.add( self.oKey[0], self.ids_to_words(lines[0]), asMainKey=True )
-            else:
-              # do not need to rescore
-              if self.rescore_function is None:
-                for i, line in enumerate(lines):
-                  outKey = self.oKey[0] if i == 0 else ( self.oKey[0] + f"-{i+1}" )
-                  packet.add( outKey, self.ids_to_words(line), asMainKey=True )
-
-              else:
-                nbestsInt = [ [ int(ID) for ID in line.split() ] for line in lines ]
-                nResults = self.rescore_function( nbestsInt )
-                assert isinstance(nbestsInt,(list,tuple)) and len(nbestsInt) > 0
-                for i,re in enumerate(nResults):
-                  assert isinstance(re,(list,tuple)) and len(nbestsInt) > 0
-                  outKey = self.oKey[0] if i == 0 else ( self.oKey[0] + f"-{i+1}" )
-                  packet.add( outKey, self.ids_to_words(re), asMainKey=True )
-              
+            line = line[2:].strip()
+            if len(line) == 0:
               self.put_packet( packet )
-            
-            ### Add a endpoint flag
-            self.put_packet( ENDPOINT )
-
+            else:
+              lines = line[2:].strip().split("-1") # discard the flag "-2 -1"
+              lines = [ line.strip().split() for line in lines if len(line.strip()) > 0 ] 
+              if len(lines) == 0:
+                packet.add( self.oKey[0], " ", asMainKey=True )
+              elif len(lines) == 1:
+                packet.add( self.oKey[0], self.ids_to_words(lines[0]), asMainKey=True )
+              else:
+                # do not need to rescore
+                if self.rescore_function is None:
+                  for i, line in enumerate(lines):
+                    outKey = self.oKey[0] if i == 0 else ( self.oKey[0] + f"-{i+1}" )
+                    packet.add( outKey, self.ids_to_words(line), asMainKey=True )
+                else:
+                  nbestsInt = [ [ int(ID) for ID in line.split() ] for line in lines ]
+                  nResults = self.rescore_function( nbestsInt )
+                  assert isinstance(nbestsInt,(list,tuple)) and len(nbestsInt) > 0
+                  for i,re in enumerate(nResults):
+                    assert isinstance(re,(list,tuple)) and len(nbestsInt) > 0
+                    outKey = self.oKey[0] if i == 0 else ( self.oKey[0] + f"-{i+1}" )
+                    packet.add( outKey, self.ids_to_words(re), asMainKey=True )
+              
+              if not is_endpoint(packet):
+                self.put_packet( packet )
+              else:
+                self.put_packet( Endpoint(items=dict(packet.items()),cid=packet.cid,idmaker=packet.idmaker) )
+          
           ## Final step
           elif line.startswith("-3"): 
             break
 
           else:
             raise Exception(f"{self.name}: Expected flag (-1 -> partial) (-2 endpoint) (-3 termination) but got: {line}")
-
+  
     except Exception as e:
       if not self.inPIPE.state_is_(mark.wrong,mark.terminated):
         self.inPIPE.kill()
@@ -359,14 +370,6 @@ class WfstDecoder(Component):
       self.__decodeProcess.kill()
 
   def core_loop(self):
-    
-    # open exkaldi online decoding process
-    self.__decodeProcess = subprocess.Popen(self.__cmd,shell=True,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-    # open reading result thread
-    self.__readResultThread = threading.Thread(target=self.__read_result_from_subprocess)
-    self.__readResultThread.setDaemon(True)
-    self.__readResultThread.start()
-    
     # start core loop
     try:
       while True:
@@ -377,7 +380,7 @@ class WfstDecoder(Component):
         elif action is None:
           # final step
           try:
-            self.__decodeProcess.stdin.write(b"-3 ")
+            self.__decodeProcess.stdin.write(b" -3 ")
             self.__decodeProcess.stdin.flush()
           except Exception as e:
             print(self.__decodeProcess.stderr.read().decode())
@@ -387,28 +390,48 @@ class WfstDecoder(Component):
         else:
           packet = self.get_packet()
           if is_endpoint(packet):
-            try:
-              self.__decodeProcess.stdin.write(b"-2 ")
-              self.__decodeProcess.stdin.flush()
-            except Exception as e:
-              print(self.__decodeProcess.stderr.read().decode())
-              raise e  
-          else:
-            iKey = packet.mainKey if self.iKey is None else self.iKey
+            if packet.is_empty():
+              try:
+                self.__decodeProcess.stdin.write(b" -2 0 ")
+                self.__decodeProcess.stdin.flush()
+              except Exception as e:
+                print(self.__decodeProcess.stderr.read().decode())
+                raise e              
+            else:
+              iKey = packet.mainKey if self.iKey is None else self.iKey
+              mat = packet[iKey]
+              assert isinstance(mat,np.ndarray) and len(mat.shape) == 2
+              assert mat.shape[0] <= self.__max_batch_size, "The chunk size of matrix > max allowable batch size of this decoder."
+              assert mat.shape[1] == self.__pdfs, "The dim. of probability does not match the PDFs."
+              mat = self.__acoustic_scale * mat
+              header = f" -2 {mat.shape[0]} ".encode()
+              inputs = header + encode_vector_temp( mat.reshape(-1) )
+              try:
+                self.__decodeProcess.stdin.write(inputs)
+                self.__decodeProcess.stdin.flush()
+              except Exception as e:
+                print(self.__decodeProcess.stderr.read().decode())
+                raise e     
             self.__packetCache.put( packet )
-            mat = self.__acoustic_scale * packet[iKey]
-
-            assert mat.shape[0] <= self.__max_batch_size, "The chunk size of matrix > max allowable batch size of this decoder."
-            assert mat.shape[1] == self.__pdfs, "The dim. of probability does not match the PDFs."
-
-            header = f"-1 {mat.shape[0]} ".encode()
-            inputs = header + encode_vector_temp( mat.reshape(-1) )
-            try:
-              self.__decodeProcess.stdin.write(inputs)
-              self.__decodeProcess.stdin.flush()
-            except Exception as e:
-              print(self.__decodeProcess.stderr.read().decode())
-              raise e
+          else:
+            if packet.is_empty():
+              continue
+            else:
+              iKey = packet.mainKey if self.iKey is None else self.iKey
+              mat = packet[iKey]
+              assert isinstance(mat,np.ndarray) and len(mat.shape) == 2
+              assert mat.shape[0] <= self.__max_batch_size, "The chunk size of matrix > max allowable batch size of this decoder."
+              assert mat.shape[1] == self.__pdfs, "The dim. of probability does not match the PDFs."
+              mat = self.__acoustic_scale * mat
+              header = f" -1 {mat.shape[0]} ".encode()
+              inputs = header + encode_vector_temp( mat.reshape(-1) )
+              try:
+                self.__decodeProcess.stdin.write(inputs)
+                self.__decodeProcess.stdin.flush()
+              except Exception as e:
+                print(self.__decodeProcess.stderr.read().decode())
+                raise e
+              self.__packetCache.put( packet )
 
       # Wait until all results has been gotten. 
       self.__readResultThread.join()
@@ -417,6 +440,19 @@ class WfstDecoder(Component):
     finally:
       self.__decodeProcess.stdout.close()
       self.__decodeProcess.kill()
+
+  def _create_thread(self,func):
+    # open exkaldi online decoding process
+    self.__decodeProcess = subprocess.Popen(self.__cmd,shell=True,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    # open reading result thread
+    self.__readResultThread = threading.Thread(target=self.__read_result_from_subprocess)
+    self.__readResultThread.setDaemon(True)
+    self.__readResultThread.start()
+    
+    coreThread = threading.Thread(target=func)
+    coreThread.setDaemon(True)
+    coreThread.start()
+    return coreThread
 
 def dump_text_PIPE(pipe,key=None,allowPartial=True,endSymbol="\n"):
   '''
@@ -437,17 +473,17 @@ def dump_text_PIPE(pipe,key=None,allowPartial=True,endSymbol="\n"):
       break
     else:
       packet = pipe.get()
-      if is_endpoint(packet):
-        if memory is None:
-          continue
-        else:
-          result.append( memory )
-          memory = None
-      else:
+      if not packet.is_empty():
         iKey = packet.mainKey if key is None else key
         text = packet[iKey]
         assert isinstance(text,str)
         memory = text
+      if is_endpoint(packet):
+        if memory is None:
+          continue
+        else:
+          result.append(memory)
+          memory = None
 
   if allowPartial and (memory is not None):
     result.append( memory )
