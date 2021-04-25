@@ -25,9 +25,10 @@ from io import BytesIO
 from exkaldirt.base import ExKaldiRTBase, Component, PIPE, Packet
 from exkaldirt.base import info, mark, Endpoint, is_endpoint, NullPIPE
 from exkaldirt.utils import *
-#from base import ExKaldiRTBase, Component, PIPE, Packet
-#from base import info, mark, Endpoint, is_endpoint, NullPIPE
-#from utils import *
+
+""" from base import ExKaldiRTBase, Component, PIPE, Packet
+from base import info, mark, Endpoint, is_endpoint, NullPIPE
+from utils import * """
 
 socket.setdefaulttimeout(info.TIMEOUT)
 
@@ -215,6 +216,7 @@ class PacketSender(Component):
                                 tport=self.__rAddr[1],
                                 name=self.basename+" Send Protocol"
                               )
+    timecost = 0
     try:
       while True:
 
@@ -300,41 +302,50 @@ class PacketSender(Component):
               self.__proto.send( PacketMark + packet.encode() ) 
         
         else:
-          # Tell remote host the state and get the feedback
-          feedback = self.__proto.send( ActiveMark + double_to_bytes(self.inPIPE.timestamp) )  
-          # Check the feedback information
-          # If remote state is wrong
-          if feedback[0:1] == ErrorMark:
-            if not self.inPIPE.state_is_(mark.wrong,mark.terminated):
+          if self.inPIPE.is_empty():
+            time.sleep( info.TIMESCALE )
+            timecost += info.TIMESCALE
+            if timecost > info.TIMEOUT:
+              print(f"{self.name}: Timeout!")
               self.inPIPE.kill()
-            if not self.outPIPE.state_is_(mark.wrong,mark.terminated):
               self.outPIPE.kill()
-            break
-          # if remote state is terminated
-          elif feedback[0:1] == TerminatedMark:
-            if not self.inPIPE.state_is_(mark.wrong,mark.terminated):
-              self.inPIPE.stop()
-            if not self.outPIPE.state_is_(mark.wrong,mark.terminated):
-              self.outPIPE.stop()
-            break
-          # if remote state is stranded
-          elif feedback[0:1] == StrandedMark:
-            remoteTimeStamp = double_from_bytes( feedback[1:] )
-            if remoteTimeStamp > self.inPIPE.timestamp:
-              self.inPIPE.pause()
-              if self.outPIPE.state_is_(mark.active):
-                self.outPIPE.pause()
-              time.sleep( info.TIMESCALE )
-              continue
-            else:
-              # stranded output PIPE
-              if self.outPIPE.state_is_( mark.silent, mark.stranded ):
-                self.outPIPE.activate()
-          # if remote state is decided as active
-          # its ok to send packet
+              break
           else:
-            packet = self.get_packet()
-            self.__proto.send( PacketMark + packet.encode() ) 
+            # Tell remote host the state and get the feedback
+            feedback = self.__proto.send( ActiveMark + double_to_bytes(self.inPIPE.timestamp) ) 
+            # Check the feedback information
+            # If remote state is wrong
+            if feedback[0:1] == ErrorMark:
+              if not self.inPIPE.state_is_(mark.wrong,mark.terminated):
+                self.inPIPE.kill()
+              if not self.outPIPE.state_is_(mark.wrong,mark.terminated):
+                self.outPIPE.kill()
+              break
+            # if remote state is terminated
+            elif feedback[0:1] == TerminatedMark:
+              if not self.inPIPE.state_is_(mark.wrong,mark.terminated):
+                self.inPIPE.stop()
+              if not self.outPIPE.state_is_(mark.wrong,mark.terminated):
+                self.outPIPE.stop()
+              break
+            # if remote state is stranded
+            elif feedback[0:1] == StrandedMark:
+              remoteTimeStamp = double_from_bytes( feedback[1:] )
+              if remoteTimeStamp > self.inPIPE.timestamp:
+                self.inPIPE.pause()
+                if self.outPIPE.state_is_(mark.active):
+                  self.outPIPE.pause()
+                time.sleep( info.TIMESCALE )
+                continue
+              else:
+                # stranded output PIPE
+                if self.outPIPE.state_is_( mark.silent, mark.stranded ):
+                  self.outPIPE.activate()
+            # if remote state is decided as active
+            # its ok to send packet
+            else:
+              packet = self.get_packet()
+              self.__proto.send( PacketMark + packet.encode() ) 
           
     except Exception as e:
       try:
@@ -358,6 +369,8 @@ class PacketReceiver(Component):
     super().__init__(oKey="null",name=name)
     # Define the protocol
     self.__bport = bport
+    #
+    self.link( NullPIPE() )
     
   def core_loop(self):
 

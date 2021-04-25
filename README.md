@@ -21,7 +21,7 @@ We tested our toolkit using Kaldi version 5.5, commit acff3f65640715f22252f143df
 1. Instead of _subprocess_ in Python, use Pybind to build the interface with C++ library.
 (It is being gradually completed.)
 
-2. Still use multiple threads to drive each components ( We have tried to use multiprocessing, but we have encountered some difficulties in data communication between different processes, and are considering solutions. )
+2. Still use multiple threads to drive each components ( We have tried to use multiprocessing, but we have encountered some difficulties in data communication between different processes, and are considering solutions. Multi-threading may cause a certain amount of resource congestion and affect the realtime factor, so we still plan to use multi-process in future versions.)
 
 3. Improve the Packet to carry more infomation.
 

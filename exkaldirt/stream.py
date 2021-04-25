@@ -32,10 +32,10 @@ from exkaldirt.utils import run_exkaldi_shell_command
 from exkaldirt.base import info, mark, print_
 from exkaldirt.base import Endpoint, is_endpoint, NullPIPE
 
-#from base import ExKaldiRTBase, Component, PIPE, Packet, ContextManager
-#from utils import run_exkaldi_shell_command
-#from base import info, mark, print_
-#from base import Endpoint, is_endpoint, NullPIPE
+""" from base import ExKaldiRTBase, Component, PIPE, Packet, ContextManager
+from utils import run_exkaldi_shell_command
+from base import info, mark, print_
+from base import Endpoint, is_endpoint, NullPIPE """
 
 def record(seconds=0,fileName=None):
   '''
@@ -389,6 +389,7 @@ class StreamReader(Component):
       while i < readTimes:
         # Decide state
         master, state = self.decide_state()
+        #print("master:",master,"state:",state,"inPIPE state:",self.inPIPE.state,"outPIPT state:",self.outPIPE.state)
         # If state is silent (although unlikely) 
         if state in [mark.wrong,mark.terminated]:
           break
@@ -413,7 +414,8 @@ class StreamReader(Component):
         if valid is True:
           ## append data
           for ele in np.frombuffer(data,dtype=self.__format):
-            self.put_packet( Packet( items={self.oKey[0]:ele},cid=self.__id_count,idmaker=self.objid ) )
+            if self.outPIPE.state_is_(mark.silent,mark.active):
+              self.put_packet( Packet( items={self.oKey[0]:ele},cid=self.__id_count,idmaker=self.objid ) )
         elif valid is None:
           self.put_packet( Endpoint( cid=self.__id_count,idmaker=self.objid ) )
         ## if reader has been stopped by force
@@ -533,7 +535,8 @@ class StreamRecorder(Component):
         if valid is True:
           ## append data
           for ele in np.frombuffer(data,dtype=self.__format):
-            self.put_packet( Packet( items={self.oKey[0]:ele},cid=self.__id_count,idmaker=self.objid ) )
+            if self.outPIPE.state_is_(mark.silent,mark.active):
+              self.put_packet( Packet( items={self.oKey[0]:ele},cid=self.__id_count,idmaker=self.objid ) )
         elif valid is None:
           self.put_packet( Endpoint( cid=self.__id_count,idmaker=self.objid ) )
 
@@ -673,9 +676,37 @@ class ElementFrameCutter(Component):
         break
 
     if self.__streamBuffer is not None:
-      self.__streamBuffer[i:] = 0
+      self.__streamBuffer[i+1:] = 0
 
     return True
+
+class FrameDissolver(Component):
+
+  def __init__(self,oKey="data",name=None):
+    super().__init__(oKey=oKey,name=name)
+    self.__id_counter = 0
+  
+  @property
+  def __id_count(self):
+    self.__id_counter += 1
+    return self.__id_counter - 1
+  
+  def core_loop(self):
+    while True:
+
+      action = self.decide_action()
+      if action is True:
+        packet = self.get_packet()
+        if not packet.is_empty():
+          iKey = self.iKey if self.iKey is not None else packet.mainKey
+          data = packet[iKey]
+          assert isinstance(data,np.ndarray), f"{self.name}: Can only dissolve vector and matrix packet but got: {type(data)}."
+          for element in data.reshape(-1):
+            self.put_packet( Packet( {self.oKey[0]:element},cid=self.__id_count,idmaker=packet.idmaker ) )
+        if is_endpoint(packet):
+          self.put_packet( Endpoint(cid=self.__id_count,idmaker=packet.idmaker) )
+      else:
+        break
 
 class VectorBatcher(Component):
 

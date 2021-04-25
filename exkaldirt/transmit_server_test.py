@@ -1,6 +1,7 @@
 import base
 import transmit
 import numpy as np
+import socket
 
 #############################
 # exkaldirt.transmit.PacketReceiver
@@ -25,4 +26,4 @@ def test_receiver():
     print( packet.items() )
 
 test_receiver()
-    
+

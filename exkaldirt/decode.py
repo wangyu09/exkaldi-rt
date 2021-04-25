@@ -27,11 +27,14 @@ from exkaldirt.base import Component, PIPE, Packet, ContextManager, Endpoint
 from exkaldirt.utils import encode_vector_temp
 from exkaldirt.feature import apply_floor
 
-#from base import info, mark
-#from base import Component, PIPE, Packet, ContextManager
-#from utils import encode_vector_temp
-#from feature import apply_floor
-#from base import Endpoint, is_endpoint, print_
+""" from base import info, mark, is_endpoint, print_
+from base import Component, PIPE, Packet, ContextManager, Endpoint
+from utils import encode_vector_temp
+from feature import apply_floor """
+
+if info.CMDROOT is None:
+  raise Exception("ExKaldi-RT C++ library have not been compiled sucessfully. " + \
+                  "Please consult the Installation in github: https://github.com/wangyu09/exkaldi-rt .")
 
 def softmax(data,axis=1):
   assert isinstance(data,np.ndarray)

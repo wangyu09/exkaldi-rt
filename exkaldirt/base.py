@@ -31,12 +31,12 @@ import glob
 from exkaldirt.version import version
 from exkaldirt.utils import *
 
-#from version import version
-#from utils import *
-
+""" from version import version
+from utils import *
+ """
 class Info:
   '''
-  A object to define some parameters of ExKaldi-RT.
+  A object to hold some configs of ExKaldi-RT.
   '''
   def __init__(self):
     self.__timeout = 1800
@@ -126,14 +126,29 @@ class Info:
     return self.__max_socket_buffer_size
 
   def set_MAX_SOCKET_BUFFER_SIZE(self,size:int):
+    '''
+    Reset maximum socket buffer size.
+    '''
     assert isinstance(size,int) and size > 4
     self.__max_socket_buffer_size = size
 
   def set_TIMEOUT(self,value):
+    '''
+    Reset global timeout value.
+
+    Args:
+      _value_: a positive int value.
+    '''
     assert isinstance(value,int) and value > 0, "TIMEOUT must be an int value."
     self.__timeout = value
   
   def set_TIMESCALE(self,value):
+    '''
+    Reset global timescale value.
+
+    Args:
+      _value_: a float value in (0, 1).
+    '''
     assert isinstance(value,float) and 0 < value < 1.0, "TIMESCALE should be a float value in (0,1)."
     self.__timescale = value
 
@@ -168,14 +183,23 @@ class ExKaldiRTBase:
 
   @property
   def objid(self):
+    '''
+    Get the unique object ID.
+    '''
     return self.__objid
 
   @property
   def name(self):
+    '''
+    Get the name: basename + [ the object id ] .
+    '''
     return self.__name + f"[{self.__objid}]"
 
   @property
   def basename(self):
+    '''
+    The basename.
+    '''
     return self.__name
 
 ########################################
@@ -183,15 +207,26 @@ class ExKaldiRTBase:
 class Packet:
   '''
   Packet object is used to hold various stream data, such as audio stream, feature and probability.
-  These data will be processed by Component and passed in PIPE.
-  We only support 4 types of data: np.int, np.float, str, np.ndarray.
+  These data will be processed by Components and Joints, and passed in PIPE.
+  A packet can hold 4 types of data:
+  1, element: int, float, numpy int, numpy float.
+  2, vector: numpy 1-d array.
+  3, matrix: numpy 2-d array.
+  4, text: str.
   '''
   def __init__(self,items,cid,idmaker,mainKey=None):
-    assert isinstance(items,dict), f"_items_ must be a dict object."
+    '''
+    Args:
+      _items_: a dict object.
+      _cid_: the packet ID. It will be numbered by some components.
+      _idmaker_: the object ID of a component who numbered this packet.
+      _mainKey_: specify a key as main key. If None, we will decide it automatically.
+    '''
+    assert isinstance(items,dict), f"<items> must be a dict object but got: {type(items)}."
     self.__data = {}
     # Set items
     if mainKey is not None:
-      assert mainKey in items.keys()
+      assert mainKey in items.keys(), f"<mainKey> is not in items: {mainKey}."
       self.__mainKey = mainKey
       for key,value in items.items():
         self.add(key,value)
@@ -202,9 +237,9 @@ class Packet:
         if self.__mainKey is None:
           self.__mainKey = key
     # Set chunk id
-    assert isinstance(cid,int) and cid >= 0
+    assert isinstance(cid,int) and cid >= 0, f"<cid> must be an int value and >= 0 but got: {cid}"
     self.__cid = cid
-    assert isinstance(idmaker,int)
+    assert isinstance(idmaker,int), f"<idmaker> must be an avaliable object ID but got: {idmaker}"
     self.__idmaker = idmaker
 
   @property
@@ -223,13 +258,19 @@ class Packet:
     assert key in self.__data.keys()
     return self.__data[key]
   
-  def add(self,key,data,asMainKey=False):
+  def add(self,key:str,data,asMainKey:bool=False):
     '''
-    Add one record, if this key has already existed, replace the record in Packet, or append this new record. 
+    Add one record to packet.
+    If this key has already existed, replace the record in packet, otherwise append this new record. 
+
+    Args:
+      _key_: (str) key.
+      _data_: (int,float,np.int,np.float,np.ndarray,str) value.
+      _asMainKey_: (bool) If True, set this key as main key.
     '''
     # Verify key name
-    assert isinstance(key,str), "_key_ must be a string."
-    assert " " not in key and key.strip() != "", "_key_ can not include space."
+    assert isinstance(key,str), f"<key> must be a string but got: {key}."
+    assert " " not in key and key.strip() != "", f"<key> can not include space: {key}."
     # Verify value
     if isinstance(data,int):
         data = np.int16(data)
@@ -244,14 +285,17 @@ class Packet:
     elif isinstance(data,str):
       assert data != ""
     else:
-        raise Exception("Unsupported data type")
+        raise Exception(f"Packet data can be int, float, str or np.ndarray but got unsupported data type: {type(data)}.")
     self.__data[key] = data
     if asMainKey:
       self.__mainKey = key
   
   def encode(self)->bytes:
     '''
-    Encode packet.
+    Encode packet to bytes.
+
+    Return:
+      (bytes) encoded object.
     '''
     result = b""
     
@@ -286,7 +330,7 @@ class Packet:
           bvalue = value.encode()
           flag = b"S"
         else:
-          raise Exception("Unsupported data type.")
+          raise Exception(f"Packet data can be int, float, str or np.ndarray but got unsupported data type: {type(value)}.")
         result += ( flag + uint_to_bytes( len(bvalue),length=4 ) + bvalue )
   
     return result
@@ -294,48 +338,60 @@ class Packet:
   @classmethod
   def decode(cls,bstr):
     '''
-    Generate a packet object.
+    Restorage a packet object fro bytes object.
+
+    Args:
+      _bstr_: (bytes) Encoded packet object.
+    
+    Return:
+      (Packet,Endpoint) Decoded object.
     '''
-    with BytesIO(bstr) as sp:
-      
-      # Read class name
-      className = read_string( sp )
+    try:
+      with BytesIO(bstr) as sp:
+        
+        # Read class name
+        className = read_string( sp )
+        assert className in ["Packet","Endpoint"]
 
-      # Read chunk ID
-      idmaker = uint_from_bytes( sp.read(4) )
-      cid = uint_from_bytes( sp.read(4) )
-      # Read main key
-      mainKey = read_string( sp )
+        # Read chunk ID
+        idmaker = uint_from_bytes( sp.read(4) )
+        cid = uint_from_bytes( sp.read(4) )
+        # Read main key
+        mainKey = read_string( sp )
 
-      result = {}
-      # If this is not an empty packet
-      if mainKey != "":
-        # Read data
-        while True:
-          key = read_string(sp)
-          if key == "":
-            break
-          flag = sp.read(1).decode()
-          if flag == "E":
-            size = uint_from_bytes( sp.read(4) )
-            data = element_from_bytes( sp.read(size) )
-          elif flag == "V":
-            size = uint_from_bytes( sp.read(4) )
-            data = vector_from_bytes( sp.read(size) )
-          elif flag == "M":
-            size = uint_from_bytes( sp.read(4) )
-            data = matrix_from_bytes( sp.read(size) )
-          elif flag == "S":
-            size = uint_from_bytes( sp.read(4) )
-            data = sp.read(size).decode()
-          else:
-            raise Exception(f"Unknown flag: {flag}")
+        result = {}
+        # If this is not an empty packet
+        if mainKey != "":
+          # Read data
+          while True:
+            key = read_string(sp)
+            if key == "":
+              break
+            flag = sp.read(1).decode()
+            if flag == "E":
+              size = uint_from_bytes( sp.read(4) )
+              data = element_from_bytes( sp.read(size) )
+            elif flag == "V":
+              size = uint_from_bytes( sp.read(4) )
+              data = vector_from_bytes( sp.read(size) )
+            elif flag == "M":
+              size = uint_from_bytes( sp.read(4) )
+              data = matrix_from_bytes( sp.read(size) )
+            elif flag == "S":
+              size = uint_from_bytes( sp.read(4) )
+              data = sp.read(size).decode()
+            else:
+              raise Exception(f"Data flag can be E(element), V(vector), M(matrix), S(string) but got a unknown flag: {flag}")
 
-          result[ key ] = data
+            result[ key ] = data
 
-      # otherwise, this is an empty packet
-      else:
-        mainKey = None
+        # otherwise, this is an empty packet
+        else:
+          mainKey = None
+    
+    except Exception as e:
+      print_( f"Failed to decode packet. This may be not a bytes packet." )
+      raise e
 
     return globals()[className](items=result,cid=cid,idmaker=idmaker,mainKey=mainKey)
   
@@ -348,16 +404,62 @@ class Packet:
   def items(self):
     return self.__data.items()
 
-  def is_empty(self):
+  def is_empty(self)->bool:
+    '''
+    Return "True" if packet is empty.
+    '''
     return len(self.keys()) == 0
+
+  def save(self,fileName)->str:
+    '''
+    Save packet to a binary file.
+    
+    Args:
+      _fileName_: (str) file name with suffix ".pak".
+    
+    Return:
+      (str) finally saved absolute file path.
+    '''
+    assert isinstance(fileName,str) and len(fileName.strip()) > 0
+    fileName = fileName.strip()
+    if not fileName.endswith(".pak"):
+      fileName += ".pak"
+    absname = os.path.abspath(fileName)
+    ddir = os.path.dirname(absname)
+    if not os.path.isdir(ddir):
+      os.makedirs(ddir)
+    with open(fileName,"wb") as fw:
+      fw.write( self.encode() )
+    
+    return absname
+    
+  @classmethod
+  def load(cls,fileName):
+    '''
+    Load packet from binary file.
+
+    Args:
+      _fileName_: (str) file name.
+    
+    Return:
+      (Packet,Endpoint) object.
+    '''
+    assert os.path.isfile(fileName), f"No such file: {fileName}."
+    with open(fileName,"rb") as fr:
+      data = fr.read()
+    return cls.decode(data)
 
 # ENDPOINT is a special packet.
 class Endpoint(Packet):
-
+  '''
+  A special packet to mark endpoint of audio.
+  An endpoint packet is defaultly empty.
+  But it also can hold data.
+  '''
   def __init__(self,cid,idmaker,items={},mainKey=None):
     super().__init__(items,cid,idmaker,mainKey)
   
-def is_endpoint(obj):
+def is_endpoint(obj)->bool:
   '''
   If this is Endpoint, return True.
   '''
@@ -367,6 +469,9 @@ def is_endpoint(obj):
 stdout_lock = threading.Lock()
 
 def print_(*args,**kwargs):
+  '''
+  Print function with thread lock.
+  '''
   with stdout_lock:
     print(*args,**kwargs)
 
@@ -380,14 +485,27 @@ mark = namedtuple("Mark",["silent","active","terminated","wrong","stranded","end
 
 class PIPE(ExKaldiRTBase):
   '''
-  PIPE is used to connect Components and pass Packets.
+  PIPE is used to connect Components (and Joints) and pass Packets.
   It is a Last-In-Last-Out queue.
-  It is designed to exchange data and state between mutiple processes.
+  It is designed to exchange data and state between mutiple threads.
+
+  A PIPE has five kinds of states:
+  | State name | description | Which states can be changed to ? | Is "put" avaliable ? | Is "get" avaliable ?
+  1. silent: PIPE is unavaliable. Next State -> active. Put -> Yes, Get -> No.
+  2. active: PIPE is working normally. Next State -> stranded, wrong, terminated. Put -> Yes, Get -> Yes.
+  3. stranded: PIPE is paused. Next State -> active, wrong, terminated. Put -> No, Get -> No.
+  4. wrong: PIPE is finished with a error state. Next State -> silent. Put -> No, Get -> Yes.
+  5. terminated: PIPE is finished with a normal state. Next State -> silent. Put -> No, Get -> Yes.
+
   Note that we will forcely:
-  1. remove continuous Endpoint flags.
+  1. remove continuous empty Endpoint flags (only keep the first one).
   2. discard the head packet if it is Endpoint flag.
   '''
   def __init__(self,name=None):
+    '''
+    Args:
+      _name_: (str) If None, we will name it with the class name.
+    '''
     # Initilize state and name
     super().__init__(name=name)
     # Set a cache to pass data
@@ -409,7 +527,11 @@ class PIPE(ExKaldiRTBase):
     # Class backs functions
     self.__callbacks = []
 
-  def state_is_(self,*m) -> bool:
+  def state_is_(self,*m)->bool:
+    '''
+    args:
+      _m_: (mark symbol or symbols).
+    '''
     return self.__state in m
 
   def __shift_state_to_(self,m):
@@ -418,11 +540,15 @@ class PIPE(ExKaldiRTBase):
     self.__time_stamp = time.time()
 
   @property
-  def state(self):
+  def state(self)->int:
     return self.__state
 
   @property
   def timestamp(self):
+    '''
+    Return:
+      (time.time) The lastest time when state is changed.
+    '''
     return self.__time_stamp
 
   #############
@@ -430,14 +556,24 @@ class PIPE(ExKaldiRTBase):
   #############
 
   def is_inlocked(self)->bool:
+    '''
+    If input port is locked, return "True".
+    '''
     return self.__inlocked
   
   def is_outlocked(self)->bool:
+    '''
+    If output port is locked, return "True".
+    '''
     return self.__outlocked
 
   def lock_in(self)->int:
     '''
-    Lock this input of PIPE.
+    Lock this input of PIPE and return the password.
+    If input port had already been locked by another master, do nothing and return None.
+
+    Return:
+      (int,None) Password.
     '''
     if self.is_inlocked():
       return None
@@ -446,21 +582,37 @@ class PIPE(ExKaldiRTBase):
   
   def lock_out(self)->int:
     '''
-    Lock this output of PIPE.
+    Lock this output of PIPE and return the password.
+    If output port had already been locked by another master, do nothing and return None.
+
+    Return:
+      (int,None) Password.
     '''
     if self.is_outlocked():
       return None
     self.__outlocked = True
     return self.__password
 
-  def release_in(self,password):
+  def release_in(self,password:int):
+    '''
+    Release the input port.
+
+    Args:
+      _password_: (int) password.
+    '''    
     if self.is_inlocked:
       if password == self.__password:
         self.__inlocked = False
       else:
         print_(f"{self.name}: Wrong password to release input port!")
   
-  def release_out(self,password):
+  def release_out(self,password:int):
+    '''
+    Release the output port.
+
+    Args:
+      _password_: (int) password.
+    '''      
     if self.is_outlocked:
       if password == self.__password:
         self.__outlocked = False
@@ -472,7 +624,10 @@ class PIPE(ExKaldiRTBase):
   #############
 
   def clear(self):
-    assert not self.state_is_(mark.active), f"{self.name}: Can not clear a active PIPE."
+    '''
+    Clear cache.
+    '''
+    assert not self.state_is_(mark.active), f"{self.name}: Can not clear an active PIPE."
     # Clear
     #size = self.size()
     #for i in range(size):
@@ -481,10 +636,12 @@ class PIPE(ExKaldiRTBase):
   
   def reset(self):
     '''
+    Reset this PIPE when state is wrong or terminated.
+
     Do:
       1. clear data,
       2. reset state to silent,
-      3. reset endpoint and time information.
+      3. reset endpoint and time report.
     Do not:
       1. reset input lock and output lock flags.
       2. reset the callbacks. 
@@ -493,7 +650,7 @@ class PIPE(ExKaldiRTBase):
       return None
 
     assert not (self.state_is_(mark.active) or self.state_is_(mark.stranded)), \
-          f"{self.name}: Can not reset a active or stranded PIPE."
+          f"{self.name}: Can not reset an active or stranded PIPE."
     # Clear cache
     self.clear()
     # Reset state
@@ -508,26 +665,30 @@ class PIPE(ExKaldiRTBase):
 
   def activate(self):
     '''
-    State:  silent -> active
+    Activate a silent or stranded PIPE.
+    State:  silent, stranded -> active.
     '''
     if not self.state_is_(mark.active):
-      assert self.state_is_(mark.silent,mark.stranded)
+      assert self.state_is_(mark.silent,mark.stranded), f"{self.name}: can only activate a silent or stranded PIPE but PIPE state is: {self.state}."
       self.__shift_state_to_(mark.active)
 
   def kill(self):
     '''
-    Kill this PIPE with state: wrong.
+    Kill a silent, active or stranded PIPE.
+    State: silent, active or strande -> wrong.
     '''
     if not self.state_is_(mark.wrong):
-      assert self.state_is_(mark.active) or self.state_is_(mark.stranded)
+      assert self.state_is_(mark.active,mark.silent,mark.stranded), f"{self.name}: can only kill a silent, stranded or active PIPE but PIPE state is: {self.state}."
       self.__shift_state_to_(mark.wrong)
   
   def stop(self):
     '''
-    Stop this PIPE state with: terminated.
+    Stop a silent, active, stranded PIPE.
+    State: silent, active or strande -> terminated.
+    Append an empty endpoint packet to the tail if necessary.
     '''
     if not self.state_is_(mark.terminated):
-      assert self.state_is_(mark.active) or self.state_is_(mark.stranded)
+      assert self.state_is_(mark.active,mark.silent,mark.stranded), f"{self.name}: can only stop a silent, stranded or active PIPE but PIPE state is: {self.state}."
       # Append a endpoint flag
       if not self.__last_added_endpoint:
         self.__cache.put( Endpoint(cid=self.__lastID[0]+1,idmaker=self.__lastID[1]) )
@@ -537,19 +698,29 @@ class PIPE(ExKaldiRTBase):
       self.__shift_state_to_(mark.terminated)
   
   def pause(self):
+    '''
+    pause an active PIPE.
+    State: active -> stranded.
+    '''
     if not self.state_is_(mark.stranded):
-      assert self.state_is_(mark.active), f"{self.name}: Can only pause active PIPE."
+      assert self.state_is_(mark.active), f"{self.name}: Can only pause an active PIPE but the state is: {self.state}."
       self.__shift_state_to_(mark.stranded)
 
-  def size(self):
+  def size(self)->int:
     '''
-    Get the size.
+    Get the cache size.
+
+    Return:
+      (int).
     '''
     return self.__cacheSize
 
   def is_empty(self)->bool:
     '''
     If there is no any data in PIPE, return True.
+
+    Return:
+      (bool).
     '''
     return self.__cacheSize == 0
 
@@ -558,41 +729,47 @@ class PIPE(ExKaldiRTBase):
     Pop a packet from head.
     Can get packet from: active, wrong, terminated PIPE.
     Can not get packet from: silent and stranded PIPE. 
+
+    Args:
+      _password_: (None,int) If PIPEport has been locked, password is necessary to access it.
+      _timeout_: (int).
+    
+    Return:
+      (False,Packet,Endpoint) If PIPE is unavaliable, return "False", else return a Packet or Endpoint object.
     '''
     if self.state_is_(mark.silent,mark.stranded):
       print_( f"Warning, {self.name}: Failed to get packet in PIPE. PIPE state is or silent or stranded." )
       return False
 
-    #print( "arrived here 1" )
-
-    assert not (self.state_is_(mark.silent) or self.state_is_(mark.stranded)), \
-          f"{self.name}: Can not get packet from silent or stranded PIPE."
-    # If PIPE is active and output port is locked
-    if self.state_is_(mark.active) and self.is_outlocked():
+    # If output port is locked
+    if self.is_outlocked():
       if password is None:
-        raise Exception(f"{self.name}: Output of PIPE is clocked. Unlock or give the password to access it.")
+        raise Exception(f"{self.name}: Output of PIPE is clocked. Release or give the password to access it.")
       elif password != self.__password:
         raise Exception(f"{self.name}: Wrong password to access the PIPE.")
-    
-    #print( "arrived here 2:",self.__cache.qsize() )
 
     packet = self.__cache.get(timeout=timeout)
     # Record time stamp
     if self.__firstGet == 0.0:
       self.__firstGet = datetime.datetime.now()
     self.__lastGet = datetime.datetime.now()
-    #print( "arrived here 3" )
-    # Return
     self.__cacheSize -= 1
+
     return packet
   
   def put(self,packet,password=None):
     '''
     Push a new packet to tail.
-    Note that: we will remove the continuous Endpoint.
-    Can put packet to: silent, alive.
-    Can not put packet to: wrong, terminated and stranded PIPE.
-    If this is a silent PIPE, activate it automatically.
+    Note that: we will remove the continuous empty Endpoint packet.
+    Can put packet to: silent, alive (If this is a silent PIPE, activate it automatically).
+    Can not put packet to: wrong, terminated and stranded PIPE. 
+    
+    Args:
+      _packet_: (Packet,Endpoint).
+      _password_: (None,int) If PIPEport has been locked, password is necessary to access it.
+    
+    Return:
+      (bool) return "True" is put done otherwise "False".
     '''
     if self.state_is_(mark.wrong,mark.terminated,mark.stranded):
       print_( f"{self.name}: Failed to put packet in PIPE. PIPE state is not active or silent." )
@@ -601,7 +778,7 @@ class PIPE(ExKaldiRTBase):
     # If input port is locked
     if self.is_inlocked():
       if password is None:
-        raise Exception(f"{self.name}: Input of PIPE is clocked. Unlock or give the password to access it.")
+        raise Exception(f"{self.name}: Input of PIPE is clocked. Release or give the password to access it.")
       elif password != self.__password:
         raise Exception(f"{self.name}: Wrong password to access the PIPE.")
 
@@ -616,13 +793,11 @@ class PIPE(ExKaldiRTBase):
     self.__lastPut = datetime.datetime.now()
     # remove endpoint continuous flags and call back 
     if is_endpoint(packet):
-      if not self.__last_added_endpoint:
+      if (not self.__last_added_endpoint) or (not packet.is_empty()):
         self.__cache.put(packet)
         self.__last_added_endpoint = True
         self.__cacheSize += 1
         self.__lastID = (packet.cid,packet.idmaker)
-      elif not packet.is_empty():
-        print_("Warning: An endpoint Packet has been discarded, even though it is not empty.")
     else:
       self.__cache.put(packet)
       self.__cacheSize += 1
@@ -635,11 +810,16 @@ class PIPE(ExKaldiRTBase):
   
   def to_list(self,mapFunc=None)->list:
     '''
-    Convert PIPE to lists divided by Endpoint.
+    Dump all packets to lists divided by endpoint flags.
     Only terminated and wrong PIPE can be converted.
+
+    Args:
+      _mapFunc_: (callable function or object) A map function to define how to get the data.
+                Defaultly, we only keep the mainKey data.
+                For example: mapFunc = lambda packet:packet[packet.mainKey]
     '''
-    assert self.state_is_(mark.terminated) or self.state_is_(mark.wrong), \
-          f"{self.name}: Only terminated or wrong PIPE can be converted to list."
+    assert self.state_is_(mark.terminated,mark.wrong), \
+          f"{self.name}: Only terminated or wrong PIPE can be dump to list."
     # Check map function
     if mapFunc is None:
       mapFunc = lambda x:x[x.mainKey]
@@ -667,6 +847,9 @@ class PIPE(ExKaldiRTBase):
   def report_time(self):
     '''
     Report time information.
+
+    Return:
+      (namedtuple) time stamp information if they are reported.
     '''
     keys = ["name",]
     values = [self.name,]
@@ -680,17 +863,26 @@ class PIPE(ExKaldiRTBase):
   def callback(self,func):
     '''
     Add a callback function executing when a new packet is appended in PIPE.
-    If _func_ is None, clear callback functions.
+    Only allow add a new callback when state is silent.
+
+    Args:
+      _func_: (callable object or None) a function or callable object. If None, clear callbacks.
+              for example: 
+                def call_func(packet):
+                  print( packet[packet.mainKey] )
     '''
-    assert self.state_is_(mark.silent)
+    assert self.state_is_(mark.silent), f"{self.name}: Only allow add a new callback to a silent PIPE but the state is: {self.state}."
     if func is None:
       self.__callbacks.clear()
     else:
-      assert callable(func)
+      assert callable(func), f"{self.name}: <func> should be a callable funtion or object but got: {type(func)}."
       self.__callbacks.append( func )
 
 class NullPIPE(PIPE):
-
+  '''
+  NullPIPE is a special PIPE.
+  It can not storage packets but can pass state information.
+  '''
   def __init__(self,name=None):
     super().__init__(name=name)
 
@@ -701,7 +893,7 @@ class NullPIPE(PIPE):
     if self.state_is_(mark.silent):
       return None
 
-    assert not (self.state_is_(mark.active) or self.state_is_(mark.stranded)), \
+    assert not self.state_is_(mark.active,mark.stranded), \
           f"{self.name}: Can not reset a active or stranded PIPE."
     # Reset state
     self.__shift_state_to_(mark.silent)
@@ -714,23 +906,23 @@ class NullPIPE(PIPE):
     return True
 
   def get(self,password=None,timeout=info.TIMEOUT)->Packet:
-    raise Exception("Null PIPE can not return packet.")
+    raise Exception(f"{self.name}: Null PIPE can not return packet.")
   
   def put(self,packet,password=None):
-    raise Exception("Null PIPE can not storage packet.")
+    raise Exception(f"{self.name}: Null PIPE can not storage packet.")
   
   def to_list(self,mapFunc=None)->list:
-    raise Exception("Null PIPE can not convert to list.")
+    raise Exception(f"{self.name}: Null PIPE can not convert to list.")
 
   def report_time(self):
-    raise Exception("Null PIPE can not report time info.")
+    raise Exception(f"{self.name}: Null PIPE can not report time info.")
 
   def callback(self,func):
-    raise Exception("Null PIPE can not add callback functions.")
+    raise Exception(f"{self.name}: Null PIPE can not add callback functions.")
 
 def is_nullpipe(pipe):
   '''
-  If this is Endpoint, return True.
+  If this is Endpoint, return "True".
   '''
   return isinstance(pipe,NullPIPE)
 
@@ -738,15 +930,22 @@ class Component(ExKaldiRTBase):
   '''
   Components are used to process Packets.
   Components can only link to one input PIPE and has one output PIPE.
+  
+  Some components would generate new packets and renumber them (most components in exkaldirt.stream module are this type.)
+  Some components would not generate new packets. They will directly add new data in old packet and passed it to next PIPE.
   '''
   def __init__(self,oKey="data",name=None):
+    '''
+    Args:
+      _oKey_: (str or list/tuple of strs), the output key(s) name of new generated data. 
+    '''
     # Initial state and name
     super().__init__(name=name)
     # Define input and output PIPE
     # Input PIPE need to be linked
     self.__inPIPE = None
     self.__inPassword = None
-    self.__outPIPE = PIPE(name=f"The output PIPE of "+self.name)
+    self.__outPIPE = PIPE(name=f"The output PIPE of "+self.basename)
     self.__outPassword = self.__outPIPE.lock_in() # Lock the in-port of output PIPE
     # Each component has a core process to run a function to handle packets.
     self.__coreThread = None
@@ -759,9 +958,9 @@ class Component(ExKaldiRTBase):
     if isinstance(oKey,str):
       self.__oKey = (oKey,)
     else:
-      assert isinstance(oKey,(tuple,list))
+      assert isinstance(oKey,(tuple,list)), f"{self.name}: <oKey> must be a string or list/tuple of strings but got: {oKey}."
       for i in oKey:
-        assert isinstance(i,str)
+        assert isinstance(i,str), f"{self.name}: <oKey> must be a string or list/tuple of strings but got: {oKey}."
       self.__oKey = tuple(oKey)
     self.__iKey = None
 
@@ -775,7 +974,7 @@ class Component(ExKaldiRTBase):
 
   def reset(self):
     '''
-    Clear and reset Component.
+    Reset component.
     '''
     if self.coreThread is None:
       return None
@@ -805,29 +1004,45 @@ class Component(ExKaldiRTBase):
     return self.__outPIPE
   
   def link(self,inPIPE:PIPE,iKey=None):
-    assert isinstance(inPIPE,PIPE)
+    '''
+    Link an input PIPE.
+    State must be silent.
+
+    Args:
+      _inPIPE_: (PIPE) input PIPE.
+      _iKey_: (None,str) specify the input key. If None, automatically find and use the mainKey of input packet.
+    '''
+    assert isinstance(inPIPE,PIPE), f"{self.name}: Can only link a PIPE (or NullPIPE) but got: {type(inPIPE)}."
 
     if iKey is not None:
-      assert isinstance(iKey,str)
+      assert isinstance(iKey,str), f"{self.name}: <iKey> should be s string but got: {iKey}."
       self.__iKey = iKey
 
-    # Release
+    # check if redirection is required
     if self.coreThread is not None:
       assert not self.coreThread.is_alive(), f"{self.name}: Can not redirect a new input PIPE when the component is running."
-      if inPIPE == inPIPE:
+      # If it does not need to redict the input PIPE
+      if inPIPE == self.__inPIPE:
         return None
-      # Release the original input PIPE
+    
+    if self.__inPIPE is not None:
       self.__inPIPE.release_out(password=self.__inPassword)
     #
-    assert not inPIPE.is_outlocked(), "The output port of PIPE has already been locked. Please release it firstly."
+    assert not inPIPE.is_outlocked(), "The output port of PIPE has already been locked by another master. Please release it firstly."
     # Lock out port of this input PIPE
     self.__inPIPE = inPIPE
     self.__inPassword = inPIPE.lock_out() # Lock the output port of PIPE
 
-  def start(self,inPIPE:PIPE=None,iKey=None):
+  def start(self,inPIPE:PIPE=None,iKey:str=None):
     '''
-    Start running a process to handle Packets in inPIPE.
+    Start running a thread to deal with packets in input PIPE and append th result to output PIPE.
+
+    Args:
+      _inPIPE_: (PIPE) the input PIPE. If an PIPE has already linked before, this is not necessary.
+      _iKey_: (None,str) in key.
     '''
+    assert self.outPIPE.state_is_(mark.silent,mark.stranded), f"{self.name}: Can only start a silent or restart a stranded Component but the state is: {self.outPIPE.state}."
+
     # If this is a silent component
     if self.coreThread is None:
       if inPIPE is None:
@@ -847,117 +1062,122 @@ class Component(ExKaldiRTBase):
       # Run core process
       self.__coreThread = self._create_thread(func=self.__core_thread_loop_wrapper)
 
-    # If this is not silent component
-    elif self.coreThread.is_alive():
-      # If this component is stranded
-      if self.__outPIPE.state_is_(mark.stranded):
-        ## If do not need to redirect
-        if inPIPE is None or inPIPE.objid == self.__inPIPE.objid:
-          self.__inPIPE.activate()
-          self.__outPIPE.activate()
-        ## If need to redirect input PIPE
-        else:
-          # Close the core process
-          self.__redirect_flag = True
-          self.wait()
-          self.__redirect_flag = False
-          # Link the new input PIPE
-          self.link(inPIPE,iKey)
-          # Activate
-          self.__outPIPE.activate()
-          # Run core process
-          if inPIPE.state_is_(mark.silent):
-            inPIPE.activate()
-          # Run core process
-          self.__coreThread = self._create_thread(func=self.__core_thread_loop_wrapper)
-    
+    # If this is a stranded component
     else:
-      raise Exception(f"{self.name}: Can only start a silent or restart a stranded Component.")
+      ## If do not need to redirect
+      if inPIPE is None or inPIPE.objid == self.__inPIPE.objid:
+        self.__inPIPE.activate()
+        self.__outPIPE.activate()
+      ## If need to redirect input PIPE
+      else:
+        # Close the core process
+        self.__redirect_flag = True
+        self.wait()
+        self.__redirect_flag = False
+        # Link the new input PIPE
+        self.link(inPIPE,iKey)
+        # Activate
+        self.__outPIPE.activate()
+        # Run core process
+        if inPIPE.state_is_(mark.silent):
+          inPIPE.activate()
+        # Run core process
+        self.__coreThread = self._create_thread(func=self.__core_thread_loop_wrapper)
 
-  def _create_thread(self,func):
+  def _create_thread(self,func)->threading.Thread:
+    '''
+    Create and start a thread.
+    '''
     coreThread = threading.Thread(target=func)
     coreThread.setDaemon(True)
     coreThread.start()
     return coreThread
 
   def decide_state(self):
-    
-    assert (not self.inPIPE.state_is_(mark.silent)) and  (not self.inPIPE.state_is_(mark.silent)), \
-           "Can not decide state because input PIPE or outPIPE have not been activated."
+    '''
+    This function is used in core thread.
+    It will check current state and time stamp of input PIPE and output PIPE, 
+    then decide the next state.
 
-    #print("Start to decide....")
+    Return:
+      1, (int,None) inPIPE or outPIPE mark or None. To mark who decided the next state.
+      2, (int) state mark. The next state.
+    '''
+    assert (not self.inPIPE.state_is_(mark.silent)) and  (not self.outPIPE.state_is_(mark.silent)), \
+           "Can not decide state because input PIPE or outPIPE has not been activated."
+
     # If input and output PIPE have the same state
     if self.inPIPE.state == self.outPIPE.state:
-      #print("Debug: 1")
-      return mark.inPIPE, self.inPIPE.state
+      return None, self.inPIPE.state
 
     # firstly check whether there is wrong state
     # if there is, terminate input and output PIPE instantly
     if self.inPIPE.state_is_(mark.wrong):
       if not self.outPIPE.state_is_(mark.terminated):
         self.outPIPE.kill()
-      #print("Debug: 2")
       return mark.inPIPE, mark.wrong
+
     elif self.outPIPE.state_is_(mark.wrong):
       if not self.inPIPE.state_is_(mark.terminated):
         self.inPIPE.kill()
-      #print("Debug: 3")
       return mark.outPIPE, mark.wrong
     
     else:
+      #  in state might be: active, stranded, terminated
+      # out state might be: active, stranded, terminated
+      # and they do not have the same state
+
       # if output PIPE is terminated
-      # also terminate input PIPE instantly
+      # terminate input PIPE instantly
       if self.outPIPE.state_is_(mark.terminated):
-        self.inPIPE.stop()
-        #print("Debug: 4")
+        if not self.inPIPE.state_is_(mark.active):
+          self.inPIPE.stop()
         return mark.outPIPE, mark.terminated
       else:
         #  in state might be: active, terminated, stranded 
         # out state might be: active, stranded
-        # and they does not have the same state
+        # and they do not have the same state
+
         if self.inPIPE.state_is_(mark.active):
           # the output state must be stranded
+          # so we now compare the timestamp of in PIPE and out PIPE 
           if self.inPIPE.timestamp > self.outPIPE.timestamp:
             self.outPIPE.activate()
-            #print("Debug: 5")
             return mark.inPIPE, mark.active
           else:
             self.inPIPE.pause()
-            #print("Debug: 6")
             return mark.outPIPE, mark.stranded
+
         elif self.inPIPE.state_is_(mark.terminated):
           if self.outPIPE.state_is_(mark.active):
-            #print("Debug: 7")
             return mark.inPIPE, mark.terminated
           else:
-            #print("Debug: 8")
             return mark.outPIPE, mark.stranded
         else:
           # the output state must be active
           if self.inPIPE.timestamp > self.outPIPE.timestamp:
             self.outPIPE.pause()
-            #print("Debug: 9")
             return mark.inPIPE, mark.stranded
           else:
             self.inPIPE.activate()
-            #print("Debug: 10")
             return mark.outPIPE, mark.active
  
   def decide_action(self):
     '''
-    A stanerd function to decide the behavior to get packet from inPIPE according to state of inPIPE and outPIPE.
-    This funtion will return:
-    1 True -> It ok to get a packet from inPIPE.
-    2 False -> Can not get new packet for error or other reasons.
-    3 None -> No packet is avaliable.
-    This function will change state of inPIPE and outPIPE.
+    A standerd function to decide the behavior according to master and next state decided by .decide_state function.
+    
+    Return:
+      (bool) True -> It ok to get a packet from inPIPE.
+             False -> Can not get new packet because of error or other reasons.
+             None -> All packets are exausted and task is over.
     '''
     timecost = 0
 
     while True:
-
+      # firstly decide next state
       master, state = self.decide_state()
-      #print( master, state )
+
+      # if state is active, check whether it is ready to get packet
       if state == mark.active:
         if self.inPIPE.is_empty():
           time.sleep(info.TIMESCALE)
@@ -971,11 +1191,16 @@ class Component(ExKaldiRTBase):
             continue
         else:
           return True
+      # if state is wrong
       elif state == mark.wrong:
         return False
+      # if state is stranded
       elif state == mark.stranded:
         time.sleep( info.TIMESCALE )
+        if self.__redirect_flag is True:
+          break
         continue
+      # if state is terminated
       elif state == mark.terminated:
         if master == mark.outPIPE:
           return False
@@ -986,9 +1211,15 @@ class Component(ExKaldiRTBase):
             return True
 
   def core_loop(self):
+    '''
+    The core loop of core thread.
+    '''
     raise Exception(f"{self.name}: Please implement the core_loop function.")
 
   def __core_thread_loop_wrapper(self):
+    '''
+    A wrapper for core loop function.
+    '''
     self.__core_thread_over = False
     print_(f"{self.name}: Start...")
     try:
@@ -1011,11 +1242,10 @@ class Component(ExKaldiRTBase):
   def stop(self):
     '''
     Terminate this component normally.
-    Note that we do not terminate the core process by this function.
-    We hope the core process can be terminated with a mild way.
+    Note that we do not terminate the core thread by this function.
+    We hope the core thread can be terminated with a mild way.
     '''
-    # Stop input PIPE
-    assert self.__inPIPE is not None
+    assert self.coreThread is not None and self.coreThread.is_alive(), f"{self.name}: component is not running."
     self.__inPIPE.stop()
 
   def kill(self):
@@ -1025,39 +1255,41 @@ class Component(ExKaldiRTBase):
     Note that we do not kill the core thread by this function.
     We hope the core thread can be terminated with a mild way.
     '''
-    # Kill input PIPE
-    assert self.__inPIPE is not None
-    self.__inPIPE.kill()
+    assert self.coreThread is not None and self.coreThread.is_alive(), f"{self.name}: component is not running."
+    self.__outPIPE.kill()
 
   def pause(self):
     '''
-    Pause the Componnent
+    Pause the Component.
     '''
-    # Kill input PIPE
-    assert self.__inPIPE is not None
+    assert self.coreThread is not None and self.coreThread.is_alive(), f"{self.name}: component is not running."
     self.__inPIPE.pause()
 
   def wait(self):
     '''
     Wait until the core thread is finished
     '''
-    if self.__coreThread is None:
-      raise Exception(f"{self.name}: Component has not been started.")
-    else:
-      self.__coreThread.join()
-      #while not self.__core_thread_over:
-      #  time.sleep(info.TIMESCALE)
-      #self.__coreThread.terminate()
-      #self.__coreThread.join()
+    assert self.coreThread is not None, f"{self.name}: component is not running."
+    self.__coreThread.join()
+    #while not self.__core_thread_over:
+    #  time.sleep(info.TIMESCALE)
+    #self.__coreThread.terminate()
+    #self.__coreThread.join()
 
   def get_packet(self):
     '''
-    Get packet from input PIPE
+    Get packet from input PIPE.
+
+    Return:
+     (Packet).
     '''
-    assert self.__inPIPE is not None
+    assert self.__inPIPE is not None, f"{self.name}: component has not been linked to an input PIPE."
     return self.__inPIPE.get(password=self.__inPassword)
 
   def put_packet(self,packet):
+    '''
+    Put a packet to output PIPE.
+    '''
     self.__outPIPE.put(packet,password=self.__outPassword)
 
 class Chain(ExKaldiRTBase):
@@ -1072,38 +1304,45 @@ class Chain(ExKaldiRTBase):
     self.__inPIPE_Pool = []
     self.__outPIPE_Pool = []
     # Component name -> Index
-    self.__name2id = {}
-    self.__id = 0
+    self.__name2index = {}
+    self.__index = 0
 
   def add(self,node,inPIPE=None,iKey=None):
     '''
-    Add a new component or joint into chain.
+    Append a new component or joint into chain.
+    If this node has not been linked to an input PIPE and <inPIPE> is None,
+    We will try to link it to the tail of chain automatically. 
+
+    Args:
+      _node_: (Component,Joint).
+      _inPIPE_: (PIPE) specify the input PIPE.
+      _iKey_: (str) specify the input key. 
     '''
     # Verify chain's state
     # Only allow adding new node to a silent chain.
     for pipe in self.__outPIPE_Pool:
-      assert pipe.state_is_(mark.silent), f"{self.name}: Chain has been activated. Can not add new components."
-    assert isinstance(node,(Component,Joint))
+      assert pipe.state_is_(mark.silent), f"{self.name}: Chain has been activated. Can not add new nodes."
+    assert isinstance(node,(Component,Joint)), f"{self.name}: <node> must be a Component or Joint object but got: {type(node)}."
 
-    # 1. if input PIPE is not specified
+    # if input PIPE is not specified
     if inPIPE is None:
-      # 1.1. if node is a component
+      # if node is a component
       if isinstance(node,Component):
-        # 1.1.1 if this component has already been linked to an input PIPE
+        # if this component has already been linked to an input PIPE
         if node.inPIPE is not None:
-          # 1.1.1.1 if the input PIPE is one of PIPEs in outPIPE pool,
-          #         remove the cache and does need to take a backup of this inPIPE
+          # if the input PIPE is one of PIPEs in outPIPE pool,
+          #    remove the cache and does need to take a backup of this inPIPE
           if node.inPIPE in self.__outPIPE_Pool:
             self.__outPIPE_Pool.remove( node.inPIPE )
-          # 1.1.1.2 if the input PIPE is an external PIPE ( not included in the chain ),
-          #         we need to add this input PIPE in Pool to take a backup of this PIPE
+          # if the input PIPE is an external PIPE ( not included in the chain ),
+          #    we need to add this input PIPE in Pool to take a backup of this PIPE
           else:
             self.__inPIPE_Pool.append( node.inPIPE )
           # storage output PIPE to Pool
           self.__outPIPE_Pool.append( node.outPIPE )
-        # 1.1.2 if the input PIPE is not been linked. We will try to link automatically.
+        # if the input PIPE is not been linked. We will try to link it automatically.
         else:
-          # 1.1.2.1 if output PIPE pool is empty
+          # if output PIPE pool is empty
           if len(self.__outPIPE_Pool) == 0:
             raise Exception(f"No pipe is avaliable in poll. We expect this component should be linked an input PIPE in advance: {node.name}.")
           # 1.1.2.2 if output PIPE pool is not empty
@@ -1113,9 +1352,9 @@ class Chain(ExKaldiRTBase):
             node.link( self.__outPIPE_Pool[0], iKey=iKey )
             # take a backup
             self.__outPIPE_Pool[0] = node.outPIPE
-      # 1.2 if node is a joint
+      # if node is a joint
       else:
-        # 1.2.1 if the input PIPE has already been linked
+        # if the input PIPE has already been linked
         if node.inNums > 0:
           # for pipe existed in outPIPE Pool, remove it
           # or take a backup
@@ -1133,22 +1372,22 @@ class Chain(ExKaldiRTBase):
             node.link( self.__outPIPE_Pool )
             self.__outPIPE_Pool = list( node.outPIPE )
     
-    # 2. if the input PIPE is specified
+    # if the input PIPE is specified
     else:
-      # 2.1 if node is component
+      # if node is component
       if isinstance(node,Component):
-        # 2.1.1 if the input PIPE is one of PIPEs in outPIPE pool,
-        #        remove the cache and does need to take a backup of this inPIPE
-        # if the node has already been linked
-        assert isinstance(inPIPE, PIPE)
+        assert isinstance(inPIPE,PIPE), f"{self.name}: <inPIPE> is not a PIPE object: {type(inPIPE)}."
+        # if the input PIPE is one of PIPEs in outPIPE pool,
+        #    remove the cache and does need to take a backup of this inPIPE
+        # if the node has already been linked to another PIPE, we try to redirect it.
         if node.inPIPE is not None:
           if node.inPIPE != inPIPE:
             print_( f"Warning: Component {node.name} has already been linked to another PIPE. We will try to redirect it." )
 
         if inPIPE in self.__outPIPE_Pool:
           self.__outPIPE_Pool.remove( inPIPE )
-        # 2.1.2 if the input PIPE is an external PIPE ( not included in the chain ),
-        #        we need to add this input PIPE in Pool to take a backup of this PIPE
+        # if the input PIPE is an external PIPE ( not included in the chain ),
+        #     we need to add this input PIPE in Pool to take a backup of this PIPE
         else:
           self.__inPIPE_Pool.append( inPIPE )
         # link input PIPE
@@ -1158,8 +1397,8 @@ class Chain(ExKaldiRTBase):
 
       # Joint
       else:
-        assert isinstance(inPIPE,(tuple,list))
-        inPIPE = list(set(inPIPE))
+        assert isinstance(inPIPE,(tuple,list)), f"{self.name}: <inPIPE> must be a PIPE or list/tuple of PIPEs: {type(inPIPE)}."
+        assert len(set(inPIPE)) == len(inPIPE), f"{self.name}: <inPIPE> has repeated PIPE object."
         if node.inNums > 0:
           print_( f"Warning: Joint {node.name} has already been linked to another PIPE. We will try to redirect it." )
 
@@ -1174,74 +1413,87 @@ class Chain(ExKaldiRTBase):
         # storage output pipes
         self.__outPIPE_Pool.extend( node.outPIPE )
     
-    # Remove repeated inPIPE and outPIPE
-    self.__inPIPE_Pool = list(set(self.__inPIPE_Pool))
-    self.__outPIPE_Pool = list(set(self.__outPIPE_Pool))
+    # Remove repeated inPIPE and outPIPE in PIPE pool ( keep order )
+    tempInPool = []
+    for pipe in self.__inPIPE_Pool:
+      if pipe not in tempInPool:
+        tempInPool.append( pipe )
+    self.__inPIPE_Pool = tempInPool
+
+    tempOutPool = []
+    for pipe in self.__outPIPE_Pool:
+      if pipe not in tempOutPool:
+        tempOutPool.append( pipe )
+    self.__outPIPE_Pool = tempOutPool
 
     # Storage and numbering this node 
     self.__chain.append( node )
-    self.__name2id[ node.name ] = (node.basename,self.__id)
-    self.__id += 1
+    self.__name2index[ node.name ] = (node.basename,self.__index)
+    self.__index += 1
 
-  def get_node(self,name=None,ID=None):
+  def get_node(self,name=None,index=None):
     '''
-    Get the component or joint by calling its name.
+    Get the component or joint by calling its name or index in chain.
+    If multiple nodes have the same name, return the first one.
     
     Args:
-      _name_: the name of Component.
-      _ID_: the index number of Component.
+      _name_: (str) the name (or basename) of Component.
+      _index_: (int) the index number of Component.
+    
+    Return:
+      (Component,Joint).
     '''
-    assert not (name is None and ID is None), f"{self.name}: Both <name> and <ID> are None."
+    assert not (name is None and index is None), f"{self.name}: Both <name> and <index> are None."
 
     if name is not None:
-      assert ID is None
-      if name in self.__name2id.keys():
-        ID = self.__name2id[name]
-        return self.__chain[ID]
+      # If this is a name (basename+[objID])
+      if name in self.__name2index.keys():
+        index = self.__name2index[name]
+        return self.__chain[index]
+      # ifthis is a basename
       else:
-        for basename,ID in self.__name2ids():
+        for basename,index in self.__name2index.values():
           if basename == name:
-            return self.__chain[ID]
+            return self.__chain[index]
         raise Exception(f"{self.name}: No such Node: {name}")
     else:
-      assert isinstance(ID,int)
-      return self.__chain[ID]
+      assert isinstance(index,int), f"{self.name}: <index> must be an int value."
+      return self.__chain[index]
 
   def start(self):
-    # 
-    assert len(self.__chain) > 0
-    assert len(self.__inPIPE_Pool) > 0
+    '''
+    Run or restart chain.
+    '''
+    assert len(self.__chain) > 0, f"{self.name}: chain is empty!"
     for pipe in self.__outPIPE_Pool:
-      assert pipe.state_is_(mark.silent,mark.stranded)
+      assert pipe.state_is_(mark.silent,mark.stranded), f"{self.name}: can start a silent or stranded chain."
     # Run all components and joints
     for node in self.__chain:
       node.start()
     
   def stop(self):
-    assert len(self.__chain) > 0
-    # Stop 
+    '''
+    Stop chain.
+    '''
+    assert len(self.__chain) > 0, f"{self.name}: chain is empty!"
     for pipe in self.__inPIPE_Pool:
-      #print("here 1",pipe.state)
       pipe.stop()
-      #if pipe.state_is_(mark.active,mark.stranded):
-      #  print("here 2")
-      #  pipe.stop()
   
   def kill(self):
-    assert len(self.__chain) > 0
+    assert len(self.__chain) > 0, f"{self.name}: chain is empty!"
     # Stop 
     for node in self.__chain:
       node.kill()
 
   def pause(self):
-    assert len(self.__chain) > 0
+    assert len(self.__chain) > 0, f"{self.name}: chain is empty!"
     # Stop 
     for pipe in self.__inPIPE_Pool:
       if pipe.state_is_(mark.active):
         pipe.pause()
 
   def wait(self):
-    assert len(self.__chain) > 0
+    assert len(self.__chain) > 0, f"{self.name}: chain is empty!"
     for node in self.__chain:
       node.wait()
 
@@ -1259,7 +1511,7 @@ class Chain(ExKaldiRTBase):
     We will reset all components in it.
     '''
     for pipe in self.__outPIPE_Pool:
-      assert not pipe.state_is_(mark.active,mark.stranded)
+      assert not pipe.state_is_(mark.active,mark.stranded), f"{self.name}: can not reset an active or stranded chain."
     # Reset all nodes
     for node in self.__chain:
       node.reset()
@@ -1275,6 +1527,17 @@ class Joint(ExKaldiRTBase):
   Joints can link to multiple input PIPEs and output PIPEs.
   '''
   def __init__(self,jointFunc,outNums=1,name=None):
+    '''
+    Args:
+      _jointFunc_: (callable object) the joint function.
+                   for example:
+                    def joint_func(items):
+                      # items is a list of dict objects from all input PIPEs.
+                      do dome process and generate multiple dicts
+                      return dict1, dict2 ...
+      _outNums_: (int) numbers of output PIPEs.
+      _name_: (str).
+    '''
     # Initial state and name
     super().__init__(name=name)
     # Define input and output PIPE
@@ -1314,9 +1577,8 @@ class Joint(ExKaldiRTBase):
     '''
     if self.coreThread is None:
       return None
-    elif self.coreThread.is_alive():
-      raise Exception(f"{self.name}: Component is active and can not reset. Please stop it firstly.")
     else:
+      assert not self.coreThread.is_alive(), f"{self.name}: Joint is active and can not reset. Please stop it firstly."
       self.__coreThread = None
       for pipe in self.__outPIPE_Pool:
         pipe.reset()
@@ -1330,11 +1592,11 @@ class Joint(ExKaldiRTBase):
     return self.__coreThread
 
   @property
-  def inPIPE(self)->list:
+  def inPIPE(self)->tuple:
     return tuple(self.__inPIPE_Pool)
 
   @property
-  def outPIPE(self)->list:
+  def outPIPE(self)->tuple:
     return tuple(self.__outPIPE_Pool)
   
   def link(self,inPIPE):
@@ -1347,7 +1609,7 @@ class Joint(ExKaldiRTBase):
     
     # 1. If this is a list/tuple of PIPEs
     if isinstance(inPIPE, (list,tuple)):
-      assert len(set(inPIPE)) == len(inPIPE)
+      assert len(set(inPIPE)) == len(inPIPE), f"{self.name}: there is repeated PIPE in input PIPEs."
       # 1.1 release the input PIPEs in Pool
       for i in range(self.__inNums):
         self.__inPIPE_Pool[i].release_out(password=self.__inPassword_Pool[i])
@@ -1436,6 +1698,9 @@ class Joint(ExKaldiRTBase):
       raise Exception(f"{self.name}: Can only start a silent or restart a stranded Component.")
 
   def _create_thread(self,func):
+    '''
+    Create and start the core thread.
+    '''
     coreThread = threading.Thread(target=func)
     coreThread.setDaemon(True)
     coreThread.start()
@@ -1821,6 +2086,12 @@ class ContextManager(ExKaldiRTBase):
     Storage a batch frames (matrix) and return the new frames wrapped with left and right context.
     If right context > 0, we will storage this batch data and return the previous batch data, 
     and None will be returned at the first step.
+
+    Args:
+      _batch_: (2d numpy array).
+    
+    Return:
+      (None, 2d numpy array).
     '''
     assert isinstance(batch,np.ndarray) and len(batch.shape) == 2
     assert 0 not in batch.shape
@@ -1846,6 +2117,15 @@ class ContextManager(ExKaldiRTBase):
         return self.__buffer[0:self.__tail,:].copy()
 
   def strip(self,batch):
+    '''
+    Strip the context.
+
+    Args:
+      _batch_: (2d numpy array).
+    
+    Return:
+      (2d numpy array).
+    '''
     assert isinstance(batch,np.ndarray) and len(batch.shape) == 2
     assert batch.shape[0] == self.__tail
     return batch[ self.__left: self.__left + self.__center ]
