@@ -32,10 +32,10 @@ from exkaldirt.utils import run_exkaldi_shell_command, encode_vector_temp
 from exkaldirt.base import info, mark, print_
 from exkaldirt.base import Endpoint, is_endpoint, NullPIPE
 
-""" from base import ExKaldiRTBase, Component, PIPE, Packet, ContextManager
-from utils import run_exkaldi_shell_command, encode_vector_temp
-from base import info, mark, print_
-from base import Endpoint, is_endpoint, NullPIPE """
+# from base import ExKaldiRTBase, Component, PIPE, Packet, ContextManager
+# from utils import run_exkaldi_shell_command, encode_vector_temp
+# from base import info, mark, print_
+# from base import Endpoint, is_endpoint, NullPIPE
 
 if info.CMDROOT is None:
 	raise Exception("ExKaldi-RT C++ library have not been compiled sucessfully. " + \

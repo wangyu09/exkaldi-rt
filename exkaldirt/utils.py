@@ -20,7 +20,10 @@ import numpy as np
 from _io import BytesIO 
 import subprocess
 
-def uint_to_bytes(value,length=4):
+def uint_to_bytes(value,length=4)->bytes:
+  '''
+  Convert an uint value to bytes.
+  '''
   return value.to_bytes(length=length,byteorder="little",signed=False)
 
 def uint_from_bytes(value):

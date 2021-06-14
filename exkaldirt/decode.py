@@ -27,10 +27,10 @@ from exkaldirt.base import Component, PIPE, Packet, ContextManager, Endpoint
 from exkaldirt.utils import encode_vector_temp
 from exkaldirt.feature import apply_floor
 
-""" from base import info, mark, is_endpoint, print_
-from base import Component, PIPE, Packet, ContextManager, Endpoint
-from utils import encode_vector_temp
-from feature import apply_floor """
+# from base import info, mark, is_endpoint, print_
+# from base import Component, PIPE, Packet, ContextManager, Endpoint
+# from utils import encode_vector_temp
+# from feature import apply_floor
 
 if info.CMDROOT is None:
   raise Exception("ExKaldi-RT C++ library have not been compiled sucessfully. " + \
@@ -82,7 +82,7 @@ def load_symbol_table(filePath):
 
 def get_pdf_dim(hmmFile):
   assert os.path.isfile(hmmFile), f"No such file: {hmmFile}."
-  cmd = f"hmm-info {hmmFile} | grep pdfs"
+  cmd = f"{info.KALDI_ROOT}/src/bin/hmm-info {hmmFile} | grep pdfs"
   p = subprocess.Popen(cmd,shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
   out,err = p.communicate()
   if p.returncode != 0:
@@ -127,7 +127,6 @@ class AcousticEstimator(Component):
     while True:
 
       action = self.decide_action()
-      #print( "debug action:", action )
 
       if action is True:
         packet = self.get_packet()
@@ -320,22 +319,23 @@ class WfstDecoder(Component):
           ## Endpoint
           elif line.startswith("-2"): 
             packet = self.__packetCache.get()
+            endpoint = Endpoint.from_packet( packet )
             line = line[2:].strip()
             if len(line) == 0:
-              self.put_packet( packet )
+              endpoint.add( self.oKey[0], " ", asMainKey=True )
             else:
               lines = line[2:].strip().split("-1") # discard the flag "-2 -1"
               lines = [ line.strip().split() for line in lines if len(line.strip()) > 0 ] 
               if len(lines) == 0:
-                packet.add( self.oKey[0], " ", asMainKey=True )
+                endpoint.add( self.oKey[0], " ", asMainKey=True )
               elif len(lines) == 1:
-                packet.add( self.oKey[0], self.ids_to_words(lines[0]), asMainKey=True )
+                endpoint.add( self.oKey[0], self.ids_to_words(lines[0]), asMainKey=True )
               else:
                 # do not need to rescore
                 if self.rescore_function is None:
                   for i, line in enumerate(lines):
                     outKey = self.oKey[0] if i == 0 else ( self.oKey[0] + f"-{i+1}" )
-                    packet.add( outKey, self.ids_to_words(line), asMainKey=True )
+                    endpoint.add( outKey, self.ids_to_words(line), asMainKey=True )
                 else:
                   nbestsInt = [ [ int(ID) for ID in line.split() ] for line in lines ]
                   nResults = self.rescore_function( nbestsInt )
@@ -343,17 +343,12 @@ class WfstDecoder(Component):
                   for i,re in enumerate(nResults):
                     assert isinstance(re,(list,tuple)) and len(nbestsInt) > 0
                     outKey = self.oKey[0] if i == 0 else ( self.oKey[0] + f"-{i+1}" )
-                    packet.add( outKey, self.ids_to_words(re), asMainKey=True )
-              
-              if not is_endpoint(packet):
-                self.put_packet( packet )
-              else:
-                self.put_packet( Endpoint(items=dict(packet.items()),cid=packet.cid,idmaker=packet.idmaker) )
-          
+                    endpoint.add( outKey, self.ids_to_words(re), asMainKey=True )
+            self.put_packet( endpoint )
+
           ## Final step
           elif line.startswith("-3"): 
             break
-
           else:
             raise Exception(f"{self.name}: Expected flag (-1 -> partial) (-2 endpoint) (-3 termination) but got: {line}")
   
@@ -446,7 +441,9 @@ class WfstDecoder(Component):
 
   def _create_thread(self,func):
     # open exkaldi online decoding process
-    self.__decodeProcess = subprocess.Popen(self.__cmd,shell=True,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    tmpCMD = self.__cmd.split()
+    self.__decodeProcess = subprocess.Popen(tmpCMD,shell=False,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+
     # open reading result thread
     self.__readResultThread = threading.Thread(target=self.__read_result_from_subprocess)
     self.__readResultThread.setDaemon(True)
@@ -476,11 +473,13 @@ def dump_text_PIPE(pipe,key=None,allowPartial=True,endSymbol="\n"):
       break
     else:
       packet = pipe.get()
+
       if not packet.is_empty():
         iKey = packet.mainKey if key is None else key
         text = packet[iKey]
         assert isinstance(text,str)
         memory = text
+
       if is_endpoint(packet):
         if memory is None:
           continue

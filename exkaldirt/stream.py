@@ -32,10 +32,10 @@ from exkaldirt.utils import run_exkaldi_shell_command
 from exkaldirt.base import info, mark, print_
 from exkaldirt.base import Endpoint, is_endpoint, NullPIPE
 
-""" from base import ExKaldiRTBase, Component, PIPE, Packet, ContextManager
-from utils import run_exkaldi_shell_command
-from base import info, mark, print_
-from base import Endpoint, is_endpoint, NullPIPE """
+# from base import ExKaldiRTBase, Component, PIPE, Packet, ContextManager
+# from utils import run_exkaldi_shell_command
+# from base import info, mark, print_
+# from base import Endpoint, is_endpoint, NullPIPE
 
 def record(seconds=0,fileName=None):
   '''
@@ -556,12 +556,13 @@ class ElementFrameCutter(Component):
   def __init__(self,batchSize=50,width=400,shift=160,oKey="data",name=None):
     '''
     Args:
+      _batchSize_: (int) Batch size. If > 1, output matrix, else, output vector.
       _width_: (int) The width of sliding window.
       _shift_: (int) The shift width of each sliding.
-      _name_: (str) Name.
+      _name_: (str) Name of component.
     '''
     super().__init__(oKey=oKey,name=name)
-    # Config some size parameters
+    # Config some size parameters. 
     assert isinstance(width,int) and isinstance(shift,int)
     assert 0 < shift <= width
     assert batchSize >= 1 
@@ -620,7 +621,6 @@ class ElementFrameCutter(Component):
     Some flags to mark position of indexes.
     '''
     self.__zerothStep = True
-    self.__firstStep = False
     self.__endpointStep = False
     self.__finalStep = False
     self.__hadData = False
@@ -637,11 +637,9 @@ class ElementFrameCutter(Component):
       if self.__zerothStep:
         pos = 0
         self.__zerothStep = False
-        self.__firstStep = True
       else:
         self.__streamBuffer[i,0:self.__cover] = self.__streamBuffer[i-1,self.__shift:]
         pos = self.__cover
-        self.__firstStep = False
 
       # get new data
       while pos < self.__width:

@@ -24,11 +24,11 @@ from io import BytesIO
 
 from exkaldirt.base import ExKaldiRTBase, Component, PIPE, Packet
 from exkaldirt.base import info, mark, Endpoint, is_endpoint, NullPIPE
-from exkaldirt.utils import *
+from exkaldirt.utils import * 
 
-""" from base import ExKaldiRTBase, Component, PIPE, Packet
-from base import info, mark, Endpoint, is_endpoint, NullPIPE
-from utils import * """
+# from base import ExKaldiRTBase, Component, PIPE, Packet
+# from base import info, mark, Endpoint, is_endpoint, NullPIPE
+# from utils import *
 
 socket.setdefaulttimeout(info.TIMEOUT)
 

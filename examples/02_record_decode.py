@@ -7,7 +7,6 @@ import time
 # Hyperparameters
 ##########################
 
-waveFile = "84-121550-0000.wav"
 kerasModel = "model.h5"
 words = "words.txt"
 hmm = "final.mdl"
@@ -31,8 +30,8 @@ kerasmodel.load_weights(kerasModel)
 # Define components
 ##########################
 
-# 1. Create a stream reader to read realtime stream from audio file
-reader = stream.StreamReader(waveFile,simulate=False)
+# 1. Create a stream recorder to read realtime stream from microphone
+recorder = stream.StreamRecorder()
 # 2. Cutter to cut frame
 cutter = stream.ElementFrameCutter(batchSize=50,width=400,shift=160)
 # 3. MFCC feature extracting
@@ -74,7 +73,7 @@ decoder = decode.WfstDecoder(
 ##########################
 
 chain = base.Chain()
-chain.add(reader)
+chain.add(recorder)
 chain.add(cutter)
 chain.add(extractor)
 chain.add(processor)
