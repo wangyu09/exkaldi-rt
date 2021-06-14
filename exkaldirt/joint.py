@@ -19,9 +19,9 @@ from exkaldirt.base import Component, Joint, Endpoint, PIPE, Packet
 from exkaldirt.base import is_endpoint
 import copy
 
-#from base import Component, Joint, Endpoint, PIPE, Packet
-#from base import is_endpoint
-#import copy
+# from base import Component, Joint, Endpoint, PIPE, Packet
+# from base import is_endpoint
+# import copy
 
 class Mapper(Component):
   '''

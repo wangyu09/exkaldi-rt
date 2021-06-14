@@ -1,6 +1,8 @@
 import base
 import transmit
 import numpy as np
+import socket
+import time
 
 #############################
 # exkaldirt.transmit.PacketSender
@@ -30,4 +32,10 @@ def test_sender():
   sender.start(inPIPE=pipe)
   sender.wait()
 
-test_sender()
+#test_sender()
+
+client = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+client.connect(("192.168.1.11",9509),)
+print( "connected! Sleep ..." )
+time.sleep(5)
+print( "client over!" )

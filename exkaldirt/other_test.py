@@ -1,10 +1,4 @@
-class A:
-  def __init__(self):
-    self.a = 10
+from collections import namedtuple
 
-class B(A):
-  def __init__(self):
-    super().__init__()
-    self.b = 20
-
-print( globals() )
+A = namedtuple("T",["t1","t2"])(0,1)
+print( A._asdict().keys() )
