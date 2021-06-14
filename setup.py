@@ -32,7 +32,7 @@ setup(
     #data_files = [
     #        (os.path.join("exkaldisrc","tools"), glob.glob( os.path.join("tools","*")))
     #    ],
-    install_requires=["numpy>=1.16","PyAudio","webrtcvad"],
+    install_requires=["numpy>=1.16","PyAudio","webrtcvad","easydict"],
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: Apache Software License",

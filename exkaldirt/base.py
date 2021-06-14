@@ -21,21 +21,19 @@ import subprocess
 import numpy as np
 import sys
 import threading
-import multiprocessing
-from multiprocessing import RawValue
 import ctypes
 import time
 import random
 import datetime
-import random
 from collections import namedtuple
 import glob
+from easydict import EasyDict
 
 from exkaldirt.version import version
 from exkaldirt.utils import *
 
-#from version import version
-#from utils import *
+# from version import version
+# from utils import *
 
 class Info:
   '''
@@ -354,11 +352,39 @@ class Packet:
   def is_empty(self):
     return len(self.keys()) == 0
 
+  def save(self,fileName):
+    assert isinstance(fileName,str) and len(fileName.strip()) > 0
+    fileName = fileName.strip()
+    if not fileName.endswith(".pak"):
+      fileName += ".pak"
+    absname = os.path.abspath(fileName)
+    ddir = os.path.dirname(absname)
+    if not os.path.isdir(ddir):
+      os.makedirs(ddir)
+    with open(fileName,"wb") as fw:
+      fw.write( self.encode() )
+    
+    return absname
+    
+  @classmethod
+  def load(cls,fileName):
+    assert os.path.isfile(fileName)
+    with open(fileName,"rb") as fr:
+      data = fr.read()
+    return cls.decode(data)
+
 # ENDPOINT is a special packet.
 class Endpoint(Packet):
 
   def __init__(self,cid,idmaker,items={},mainKey=None):
     super().__init__(items,cid,idmaker,mainKey)
+  
+  @classmethod
+  def from_packet(cls,packet):
+    return Endpoint(cid=packet.cid,idmaker=packet.idmaker,items=dict(packet.items()),mainKey=packet.mainKey)
+  
+  def to_packet(self):
+    return Packet(items=dict(self.items()),cid=self.cid,idmaker=self.idmaker,mainKey=self.mainKey)
   
 def is_endpoint(obj):
   '''
@@ -374,8 +400,10 @@ def print_(*args,**kwargs):
     print(*args,**kwargs)
 
 ########################################
-mark = namedtuple("Mark",["silent","active","terminated","wrong","stranded","endpoint","inPIPE","outPIPE"])(
-                            0,1,2,3,4,5,6,7,)
+mark = EasyDict(dict((key,value) for value,key in enumerate(
+                  ["silent","active","terminated","wrong","stranded","endpoint","inPIPE","outPIPE"]
+                  ) 
+                ))
 
 # silent : PIPE is unavaliable untill it is activated.
 # active | stranded : There might be new packets appended in it later. 
@@ -416,7 +444,7 @@ class PIPE(ExKaldiRTBase):
     return self.__state in m
 
   def __shift_state_to_(self,m):
-    assert m in mark
+    assert m in mark.values()
     self.__state = m
     self.__time_stamp = time.time()
 
@@ -548,13 +576,13 @@ class PIPE(ExKaldiRTBase):
     '''
     Get the size.
     '''
-    return self.__cacheSize
+    return self.__cache.qsize()
 
   def is_empty(self)->bool:
     '''
     If there is no any data in PIPE, return True.
     '''
-    return self.__cacheSize == 0
+    return self.size() == 0
 
   def get(self,password=None,timeout=info.TIMEOUT)->Packet:
     '''
@@ -566,8 +594,6 @@ class PIPE(ExKaldiRTBase):
       print_( f"Warning, {self.name}: Failed to get packet in PIPE. PIPE state is or silent or stranded." )
       return False
 
-    #print( "arrived here 1" )
-
     assert not (self.state_is_(mark.silent) or self.state_is_(mark.stranded)), \
           f"{self.name}: Can not get packet from silent or stranded PIPE."
     # If PIPE is active and output port is locked
@@ -576,15 +602,13 @@ class PIPE(ExKaldiRTBase):
         raise Exception(f"{self.name}: Output of PIPE is clocked. Unlock or give the password to access it.")
       elif password != self.__password:
         raise Exception(f"{self.name}: Wrong password to access the PIPE.")
-    
-    #print( "arrived here 2:",self.__cache.qsize() )
 
     packet = self.__cache.get(timeout=timeout)
+
     # Record time stamp
     if self.__firstGet == 0.0:
       self.__firstGet = datetime.datetime.now()
     self.__lastGet = datetime.datetime.now()
-    #print( "arrived here 3" )
     # Return
     self.__cacheSize -= 1
     return packet
@@ -887,26 +911,17 @@ class Component(ExKaldiRTBase):
     
     assert (not self.inPIPE.state_is_(mark.silent)) and  (not self.inPIPE.state_is_(mark.silent)), \
            "Can not decide state because input PIPE or outPIPE have not been activated."
-
     #print("Start to decide....")
     # If input and output PIPE have the same state
     if self.inPIPE.state == self.outPIPE.state:
-      #print("Debug: 1")
       return mark.inPIPE, self.inPIPE.state
 
     # firstly check whether there is wrong state
     # if there is, terminate input and output PIPE instantly
     if self.inPIPE.state_is_(mark.wrong):
-      if not self.outPIPE.state_is_(mark.terminated):
-        self.outPIPE.kill()
-      #print("Debug: 2")
-      return mark.inPIPE, mark.wrong
-    elif self.outPIPE.state_is_(mark.wrong):
-      if not self.inPIPE.state_is_(mark.terminated):
+      if not self.outP__cacheSizePE.state_is_(mark.terminated):
         self.inPIPE.kill()
-      #print("Debug: 3")
       return mark.outPIPE, mark.wrong
-    
     else:
       # if output PIPE is terminated
       # also terminate input PIPE instantly
@@ -960,7 +975,7 @@ class Component(ExKaldiRTBase):
     while True:
 
       master, state = self.decide_state()
-      #print( master, state )
+      
       if state == mark.active:
         if self.inPIPE.is_empty():
           time.sleep(info.TIMESCALE)
@@ -1162,7 +1177,7 @@ class Chain(ExKaldiRTBase):
       # Joint
       else:
         assert isinstance(inPIPE,(tuple,list))
-        inPIPE = list(set(inPIPE))
+        assert len(set(inPIPE)) == len(inPIPE)
         if node.inNums > 0:
           print_( f"Warning: Joint {node.name} has already been linked to another PIPE. We will try to redirect it." )
 
@@ -1177,9 +1192,18 @@ class Chain(ExKaldiRTBase):
         # storage output pipes
         self.__outPIPE_Pool.extend( node.outPIPE )
     
-    # Remove repeated inPIPE and outPIPE
-    self.__inPIPE_Pool = list(set(self.__inPIPE_Pool))
-    self.__outPIPE_Pool = list(set(self.__outPIPE_Pool))
+    # Remove repeated inPIPE and outPIPE ( keep order )
+    tempInPool = []
+    for pipe in self.__inPIPE_Pool:
+      if pipe not in tempInPool:
+        tempInPool.append( pipe )
+    self.__inPIPE_Pool = tempInPool
+
+    tempOutPool = []
+    for pipe in self.__outPIPE_Pool:
+      if pipe not in tempOutPool:
+        tempOutPool.append( pipe )
+    self.__outPIPE_Pool = tempOutPool
 
     # Storage and numbering this node 
     self.__chain.append( node )
@@ -1738,8 +1762,6 @@ def dynamic_display(pipe,mapFunc=None):
     out = []
     for key,value in pac.items():
       if isinstance(value,np.ndarray):
-        #temp = " ".join( [ str(v) for v in value[:10] ] )
-        #out.append( f"{key}: [ {temp} ...] " )
         out.append( f"{key}: {value} " )
       else:
         out.append( f"{key}: {value} " )
@@ -1771,7 +1793,6 @@ def dynamic_display(pipe,mapFunc=None):
       if pipe.is_empty():
         break
       else:
-        #print( "debug:", pipe.is_outlocked()  )
         packet = pipe.get()
     
     if is_endpoint( packet ):
@@ -1785,7 +1806,10 @@ def dynamic_display(pipe,mapFunc=None):
       mapFunc( packet )
 
   lastState = "terminated" if pipe.state_is_(mark.terminated) else "wrong"
-  print_( f"Final state of this PIPE: {lastState} \n Time report: {pipe.report_time()}" )
+  print_( f"Final state of this PIPE: {lastState}" )
+  report = pipe.report_time()._asdict()
+  for key, value in report.items():
+    print( f">> {key}: {value}" )
 
 def dynamic_run(target,inPIPE=None,items=["data"]):
   print_("exkaldirt.base.dynamic_run has been removed from version 1.2.0. See exkaldirt.base.dynamic_display function.")

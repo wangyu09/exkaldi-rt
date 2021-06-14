@@ -1,3 +1,3 @@
-import exkaldirt
+import version
 
-print(exkaldirt.version)
+print(version.version)

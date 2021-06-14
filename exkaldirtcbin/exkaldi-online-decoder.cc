@@ -80,7 +80,7 @@ int main(int argc, char *argv[])
   int32 TIMEOUT = atoi(argv[38]);
   //44 --timescale
   KALDI_ASSERT(strcmp(argv[39],"--timescale") == 0);
-  int32 TIMESCALE = atoi(argv[40]);
+  int32 TIMESCALE = atof(argv[40]);
   
   TransitionModel trans_model;
   ReadKaldiObject(model_in_file, &trans_model);
