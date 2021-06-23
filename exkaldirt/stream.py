@@ -360,7 +360,7 @@ class StreamReader(Component):
     Args:
       _waveFile_: (str) A wave file path.
     '''
-    if not self.outPIPE.state_is_(mark.active,mark.stranded):
+    if self.outPIPE.state_is_(mark.active,mark.stranded):
       raise Exception( f"{self.name}: Stream Reader is running. Can not redirect.")
     
     # Reset this component firstly
