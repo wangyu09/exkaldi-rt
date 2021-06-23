@@ -724,16 +724,6 @@ class NullPIPE(PIPE):
   def clear(self):
     return None
     
-  def reset(self):
-    if self.state_is_(mark.silent):
-      return None
-
-    assert not (self.state_is_(mark.active) or self.state_is_(mark.stranded)), \
-          f"{self.name}: Can not reset a active or stranded PIPE."
-    # Reset state
-    self.__shift_state_to_(mark.silent)
-    # A flag to remove continue ENDPOINT or head ENDPOINT 
-  
   def size(self):
     return 0
 

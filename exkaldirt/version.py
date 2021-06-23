@@ -19,7 +19,7 @@ from collections import namedtuple
 
 _MAJOR_VERSION = '1'
 _MINOR_VERSION = '2'
-_PATCH_VERSION = '4'
+_PATCH_VERSION = '5'
 
 version = namedtuple("ExKaldiRT",["plain","major","minor","patch"])(
                    '.'.join([_MAJOR_VERSION, _MINOR_VERSION, _PATCH_VERSION]),
